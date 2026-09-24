@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Humsafar — Carpool Pakistan",
-  description: "Find and offer shared rides across Pakistan. Agree your fare, choose your company, and share your trip.",
+  title: "Humsafar — Karachi Carpool Pilot",
+  description: "Find and offer shared rides in Karachi. Choose your meeting points, agree your fare, and share your trip.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

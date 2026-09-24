@@ -1,18 +1,19 @@
 import {DatabaseSync} from 'node:sqlite';
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import ts from 'typescript';
 const sqlite=new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../drizzle/0000_concerned_squadron_supreme.sql',import.meta.url),'utf8'));
+for(const file of readdirSync(new URL('../drizzle/',import.meta.url)).filter(f=>f.endsWith('.sql')).sort())sqlite.exec(readFileSync(new URL('../drizzle/'+file,import.meta.url),'utf8'));
 function prepared(sql,params=[]){return {bind(...p){return prepared(sql,p)},async all(){return {results:sqlite.prepare(sql).all(...params)}},async first(){return sqlite.prepare(sql).get(...params)||null},async run(){const r=sqlite.prepare(sql).run(...params);return {meta:{changes:Number(r.changes)}}}}}
 const db={prepare:prepared,async batch(statements){sqlite.exec('BEGIN');try{const out=[];for(const s of statements)out.push(await s.run());sqlite.exec('COMMIT');return out}catch(e){sqlite.exec('ROLLBACK');throw e}}};
 let identity=null;
 globalThis.__carpoolTest={db:()=>db,stmt:(sql,...p)=>prepared(sql,p),all:async(sql,...p)=>(await prepared(sql,p).all()).results,one:async(sql,...p)=>prepared(sql,p).first(),getChatGPTUser:async()=>identity};
 function moduleUrl(source){return 'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64')}
 const domain=await import(moduleUrl(readFileSync(new URL('../lib/domain.ts',import.meta.url),'utf8')));
-globalThis.__carpoolTest={...globalThis.__carpoolTest,...domain};
+const locations=await import(moduleUrl(readFileSync(new URL('../lib/locations.ts',import.meta.url),'utf8')));
+globalThis.__carpoolTest={...globalThis.__carpoolTest,...domain,...locations};
 let src=readFileSync(new URL('../app/api/carpool/route.ts',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
-src='const {getChatGPTUser,all,one,stmt,db,canTransition,departureDates,pakistanToday,routeMatches}=globalThis.__carpoolTest;\n'+src;
+src='const {getChatGPTUser,all,one,stmt,db,canTransition,departureDates,pakistanToday,routeMatches,validatePlace,endpointMatches,distanceKm}=globalThis.__carpoolTest;\n'+src;
 const {GET,POST}=await import(moduleUrl(src));
 let checks=0;function check(value,message){assert.ok(value,message);checks++}
 async function post(action,payload={},status=200){const r=await POST(new Request('https://test.local/api/carpool',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://test.local'},body:JSON.stringify({action,...payload})}));const data=await r.json();assert.equal(r.status,status,JSON.stringify(data));checks++;return data}
@@ -21,11 +22,23 @@ function user(id){identity={userId:id,email:id+'@example.test',fullName:id}}
 await post('profile',{name:'No session'},401);
 user('driver');await post('profile',{name:'Test Driver',gender:'Man',phone:'+923001234567'});
 const tomorrow=new Date(Date.now()+86400000).toISOString().slice(0,10);
-const listing={origin:'Lahore',destination:'Islamabad',stops:'Bhera|Rawalpindi',date:tomorrow,time:'23:30',seats:1,car:'White Toyota Corolla',plate:'TEST-123',fare:null,notes:'Test only',pickup:'Public landmark',dropoff:'Central stop',days:[]};
+const originPoint={id:'test:clifton',label:'Dolmen Mall Clifton',address:'Clifton, Karachi',lat:24.8021172,lng:67.0302623,source:'pin'};
+const destinationPoint={id:'test:ubl',label:'UBL City Building',address:'I. I. Chundrigar Road, Karachi',lat:24.8492715,lng:67.0013189,source:'pin'};
+const listing={originPoint,destinationPoint,stops:'Saddar',date:tomorrow,time:'23:30',seats:1,car:'White Toyota Corolla',plate:'TEST-123',fare:null,notes:'Test only',pickup:'Public landmark',dropoff:'Central stop',days:[]};
 await post('create',listing);
 let ride=(await get('action=rides&date='+tomorrow)).rides[0];check(ride.id,'ride created');check(ride.plate===undefined&&ride.phone===undefined&&ride.lat===undefined,'private fields excluded from listings');
-check((await get('action=rides&date='+tomorrow+'&from=Bhera&to=Islamabad')).rides.length===1,'forward intermediate match');
-check((await get('action=rides&date='+tomorrow+'&from=Islamabad&to=Bhera')).rides.length===0,'reverse route excluded');
+check((await get('action=rides&date='+tomorrow+'&from=Saddar&to=UBL')).rides.length===1,'forward intermediate text match');
+check((await get('action=rides&date='+tomorrow+'&from=UBL&to=Saddar')).rides.length===0,'reverse route excluded');
+const spatialQuery=(from,to)=>'action=rides&'+new URLSearchParams({date:tomorrow,fromPoint:JSON.stringify(from),toPoint:JSON.stringify(to)});
+check((await get(spatialQuery(originPoint,destinationPoint))).rides.length===1,'confirmed locations match');
+check((await get(spatialQuery({...originPoint,label:'Different spelling',lat:originPoint.lat+.002},destinationPoint))).rides.length===1,'nearby coordinates match without identical spelling');
+check((await get(spatialQuery({...originPoint,lat:24.94},destinationPoint))).rides.length===0,'distant endpoint excluded');
+check((await get(spatialQuery(destinationPoint,originPoint))).rides.length===0,'reversed endpoints excluded');
+await get('action=rides&fromPoint=broken-json',400);
+await post('create',{...listing,originPoint:{...originPoint,lat:31.5,lng:74.3}},400);
+await post('create',{...listing,originPoint:null},400);
+await post('create',{...listing,destinationPoint:originPoint},400);
+check(JSON.parse(ride.origin_point).lat===originPoint.lat,'coordinates persist');
 await post('request',{id:ride.id,message:'Own ride'},400);
 await post('seats',{id:ride.id,seats:0},400);await post('seats',{id:ride.id,seats:2});await post('seats',{id:ride.id,seats:1});
 user('passenger1');await post('profile',{name:'Passenger One',gender:'Woman',phone:''});await post('request',{id:ride.id,message:'Can we agree Rs 1500?'});await post('request',{id:ride.id,message:'duplicate'},400);

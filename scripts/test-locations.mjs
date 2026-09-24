@@ -1,0 +1,31 @@
+import {readFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
+import ts from 'typescript';
+const url=source=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
+const locations=await import(url(readFileSync(new URL('../lib/locations.ts',import.meta.url),'utf8')));
+const {KARACHI,inKarachi,validatePlace,photonPlaces,distanceKm,endpointMatches}=locations;
+const base={id:'osm:W:1',label:'Test Mosque',address:'Karachi',lat:24.85,lng:67.03,source:'photon'};
+assert.equal(inKarachi(31.5,74.3),false);assert.equal(inKarachi(NaN,67),false);assert.equal(inKarachi('24.85',67),false);
+assert.deepEqual(validatePlace(base),base);assert.throws(()=>validatePlace({...base,lat:null}));assert.throws(()=>validatePlace({...base,label:'x'.repeat(161)}));
+assert.equal(endpointMatches(JSON.stringify(base),{...base,id:'different',label:'Different spelling'}),true);
+assert.equal(endpointMatches(JSON.stringify(base),{...base,lat:24.95}),false);
+assert.equal(endpointMatches(null,base),false);assert.equal(distanceKm(base,base),0);
+const feature=(p={},coordinates=[67.03,24.85])=>({properties:{name:'Test Mosque',countrycode:'PK',osm_type:'W',osm_id:1,...p},geometry:{type:'Point',coordinates}});
+const parsed=photonPlaces({features:[feature(),feature(),feature({osm_id:2,countrycode:'IN'}),feature({osm_id:3},[74.3,31.5]),feature({osm_id:4},[null,24.85]),{invalid:true}]});
+assert.equal(parsed.length,1);assert.equal(parsed[0].label,'Test Mosque');
+globalThis.__locationTests=locations;
+let source=readFileSync(new URL('../app/api/places/route.ts',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
+source='const {KARACHI,photonPlaces}=globalThis.__locationTests;\n'+source;
+const {GET}=await import(url(source));
+const realFetch=globalThis.fetch;const realNow=Date.now;let requests=0,now=1000000;
+Date.now=()=>now;
+globalThis.fetch=async input=>{requests++;const u=new URL(input);assert.equal(u.searchParams.get('countrycode'),'PK');assert.equal(u.searchParams.get('bbox'),`${KARACHI.west},${KARACHI.south},${KARACHI.east},${KARACHI.north}`);return Response.json({features:[feature()]})};
+try{
+ const req=q=>new Request('https://test.local/api/places?'+new URLSearchParams({q}));
+ assert.equal((await GET(req('ab'))).status,400);assert.equal(requests,0);
+ let r=await GET(req('Test Mosque'));assert.equal(r.status,200);assert.equal((await r.json()).places.length,1);assert.equal(requests,1);
+ await GET(req('test mosque'));assert.equal(requests,1,'same normalized query served from cache');
+ assert.equal((await GET(req('Another mosque'))).status,429,'rapid distinct search throttled');
+ now+=2000;globalThis.fetch=async()=>{throw new Error('offline')};r=await GET(req('Unavailable'));assert.equal(r.status,503);assert.match((await r.json()).error,/map pin/);
+ console.log('Location validation, provider filtering, coordinate matching, search bounds, caching, throttling and offline fallback checks passed.');
+}finally{globalThis.fetch=realFetch;Date.now=realNow;delete globalThis.__locationTests}
