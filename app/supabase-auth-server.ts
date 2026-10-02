@@ -1,10 +1,10 @@
 import { headers } from "next/headers";
 
-export type ChatGPTUser = { userId: string; displayName: string; email: string; fullName: string | null };
+export type AuthenticatedUser = { userId: string; displayName: string; email: string; fullName: string | null };
 
 // Kept under the existing import name to avoid touching every ride route.
 // Identity is verified with Supabase Auth; client-provided user IDs are never trusted.
-export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
+export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> {
   const authorization = (await headers()).get("authorization");
   const accessToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "");
@@ -23,8 +23,8 @@ export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   } catch { return null; }
 }
 
-export async function requireChatGPTUser(): Promise<ChatGPTUser> {
-  const user = await getChatGPTUser();
+export async function requireAuthenticatedUser(): Promise<AuthenticatedUser> {
+  const user = await getAuthenticatedUser();
   if (!user) throw new Error("Please sign in with a verified Humsafar account.");
   return user;
 }

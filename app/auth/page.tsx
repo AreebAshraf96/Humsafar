@@ -33,8 +33,9 @@ export default function AuthPage() {
       saveSession(session);
       history.replaceState(null, '', location.pathname);
       if (type === 'recovery') setMode('update');
-      else if (user.email_confirmed_at) { setNotice('Your email is verified. You are signed in.'); setTimeout(() => location.assign('/'), 800); }
-      else setNotice('Link confirmed. You can now sign in.');
+      else if (user.email_confirmed_at) {
+  setNotice('Email verified successfully. Your account is ready. Login to continue to Humsafar.'); setMode('login');
+}else setNotice('Link confirmed. You can now sign in.');
     }).catch((e) => setError(e.message));
   }, []);
 
