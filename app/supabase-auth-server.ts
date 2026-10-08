@@ -33,6 +33,7 @@ export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> 
         },
 
         cache: "no-store",
+        signal: AbortSignal.timeout(10000),
       }
     );
 

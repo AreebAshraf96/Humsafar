@@ -3,10 +3,16 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { CarFront, CheckCircle2, Eye, EyeOff, ShieldCheck } from 'lucide-react';
-import { authRequest, getStoredSession, saveSession } from '@/lib/supabase-auth';
+import { authRequest, saveSession, validSession } from '@/lib/supabase-auth';
+import { disableNotifications } from '@/lib/notification-subscriptions';
 import type { SupabaseSession } from '@/lib/supabase-auth';
 
 type Mode = 'login' | 'signup' | 'recover' | 'update';
+function destination() {
+  const next = sessionStorage.getItem('humsafar.returnTo');
+  sessionStorage.removeItem('humsafar.returnTo');
+  return next === '/' || next?.startsWith('/#trip=') ? next : '/';
+}
 
 export default function AuthPage() {
   const [mode, setMode] = useState<Mode>('login');
@@ -18,10 +24,21 @@ export default function AuthPage() {
 
   useEffect(() => {
     if (new URLSearchParams(location.search).has('logout')) {
-      const session = getStoredSession();
-      if (session) void authRequest('logout', {}, session.access_token).catch(() => undefined).finally(() => saveSession(null));
-      else saveSession(null);
-      history.replaceState(null, '', '/auth');
+      void (async () => {
+        await Promise.resolve();
+        setBusy(true);
+        try {
+          const session = await validSession();
+          const results = await Promise.allSettled([
+            disableNotifications(),
+            session ? authRequest('logout', {}, session.access_token) : Promise.resolve(),
+          ]);
+          if (results.some(result => result.status === 'rejected')) throw new Error('Cleanup incomplete');
+          setNotice('You have signed out.');
+        } catch { setError('Signed out locally. If notification cleanup failed, disable this site’s notifications in your browser settings.'); }
+        finally { saveSession(null); setBusy(false); history.replaceState(null, '', '/auth'); }
+      })();
+      return;
     }
     const hash = new URLSearchParams(location.hash.slice(1));
     const accessToken = hash.get('access_token');
@@ -29,9 +46,9 @@ export default function AuthPage() {
     const type = hash.get('type');
     if (!accessToken || !refreshToken) return;
     authRequest('user', undefined, accessToken).then((user) => {
-      const session: SupabaseSession = { access_token: accessToken, refresh_token: refreshToken, user, expires_at: Number(hash.get('expires_at')) || undefined };
+      const session: SupabaseSession = { access_token: accessToken, refresh_token: refreshToken, user: user as SupabaseSession['user'], expires_at: Number(hash.get('expires_at')) || Math.floor(Date.now()/1000) + Number(hash.get('expires_in') || 3600) };
       saveSession(session);
-      history.replaceState(null, '', location.pathname);
+      history.replaceState(null, '', location.pathname + location.search);
       if (type === 'recovery') setMode('update');
       else if (user.email_confirmed_at) {
   setNotice('Email verified successfully. Your account is ready. Login to continue to Humsafar.'); setMode('login');
@@ -55,11 +72,12 @@ export default function AuthPage() {
         if (!session) throw new Error('Open the password reset link from your email first.');
         await authRequest('user', { password }, session.access_token, 'PUT');
         setNotice('Password updated. You can now continue to Humsafar.');
-        setTimeout(() => location.assign('/'), 900);
+        setTimeout(() => location.assign(destination()), 900);
       } else {
-        const session = await authRequest('token?grant_type=password', { email: email.trim(), password }) as SupabaseSession;
+        const session = await authRequest<SupabaseSession>('token?grant_type=password', { email: email.trim(), password });
         if (!session.user.email_confirmed_at) { saveSession(null); throw new Error('Please verify your email using the link we sent before signing in.'); }
-        saveSession(session); location.assign('/');
+        await disableNotifications();
+        saveSession(session); location.assign(destination());
       }
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not complete that request.'); }
     finally { setBusy(false); }
@@ -69,7 +87,8 @@ export default function AuthPage() {
   const description = mode === 'signup' ? 'Create an account to find and share rides in Karachi.' : mode === 'recover' ? 'We’ll email you a secure password reset link.' : mode === 'update' ? 'Use a strong password you have not used before.' : 'Sign in to pick up where your next journey begins.';
 
   return <main className="auth-page">
-    <section className="auth-aside"><a className="brand" href="/"><span className="brand-icon"><CarFront size={24}/></span>humsafar</a><div className="auth-story"><p className="eyebrow">BETTER JOURNEYS, TOGETHER</p><h1>Good journeys start with trust.</h1><p>Meet verified travellers, share the ride, and get there together.</p><div className="auth-promise"><ShieldCheck size={19}/> Email verification helps keep the community safer.</div></div><span className="auth-aside-foot">Humsafar · Karachi carpool pilot</span></section>
+    {process.env.NEXT_PUBLIC_PREVIEW_MODE==='true'&&<div className="preview-banner" style={{gridColumn:'1 / -1'}}>Review demo · Connected to your Supabase login · Ride changes stay local</div>}
+    <section className="auth-aside"><a className="brand" href="/auth"><span className="brand-icon"><CarFront size={24}/></span>humsafar</a><div className="auth-story"><p className="eyebrow">KARACHI, TOGETHER</p><h1>Your city.<br/>Your people.<br/>Your next ride.</h1><p>Find a seat, share the journey, and travel with people going your way.</p><div className="auth-promise"><ShieldCheck size={19}/> Sign in to browse rides and meet your fellow travellers.</div></div><span className="auth-aside-foot">Humsafar · Karachi carpool pilot</span></section>
     <section className="auth-main"><div className="auth-card">
       <p className="eyebrow">YOUR HUMSAFAR ACCOUNT</p><h2>{title}</h2><p className="auth-description">{description}</p>
       <form onSubmit={submit}>

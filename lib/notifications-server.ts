@@ -4,7 +4,7 @@ export type NotificationCategory =
   | "driver_status"
   | "trip_reminders";
 
-type SendNotificationInput = {
+export type SendNotificationInput = {
   userId: string;
   title: string;
   body: string;
@@ -92,6 +92,7 @@ export async function sendHumsafarNotification(
             url:
               input.url || "/",
           }),
+        signal: AbortSignal.timeout(15000),
       }
     );
 

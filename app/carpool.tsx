@@ -42,7 +42,7 @@ const genders=['Not specified','Woman','Man','Non-binary'];
 
 const weekdays=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
-async function api(action:string,payload?:Record<string,unknown>){const session=typeof window!=='undefined'?await validSession():null;const headers:Record<string,string>={...(payload?{'Content-Type':'application/json'}:{}),...(session?{Authorization:`Bearer ${session.access_token}`}:{})};const r=await fetch(payload?'/api/carpool':'/api/carpool?'+action,payload?{method:'POST',headers,body:JSON.stringify({action,...payload})}:{headers,cache:'no-store'});const data:any=await r.json();if(!r.ok)throw new Error(data.error||'Something went wrong. Please try again.');return data;}
+async function api(action:string,payload?:Record<string,unknown>){const session=typeof window!=='undefined'?await validSession():null;const headers:Record<string,string>={...(payload?{'Content-Type':'application/json'}:{}),...(session?{Authorization:`Bearer ${session.access_token}`}:{})};const r=await fetch(payload?'/api/carpool':'/api/carpool?'+action,payload?{method:'POST',headers,body:JSON.stringify({action,...payload})}:{headers,cache:'no-store'});const data:any=await r.json();if(r.status===401){sessionStorage.setItem('humsafar.returnTo','/'+location.hash);location.replace('/auth');throw new Error('Please sign in again.')}if(!r.ok)throw new Error(data.error||'Something went wrong. Please try again.');return data;}
 
 function money(fare:number|null){return fare===null?'Negotiable':`Rs ${fare.toLocaleString('en-PK')}`;}
 
@@ -80,7 +80,7 @@ export default function Carpool(){
 
  const loadDetail=useCallback(async(id:string)=>{const d=await api('action=detail&id='+encodeURIComponent(id));setDetail(d);return d as Detail},[]);
 
- useEffect(()=>{const params=new URLSearchParams(location.hash.slice(1));const t=params.get('trip');if(t)setToken(t);refreshMe().catch(e=>setError(e.message));search();},[]);
+ useEffect(()=>{const params=new URLSearchParams(location.hash.slice(1));const t=params.get('trip');if(t){setToken(t);return}refreshMe().catch(e=>setError(e.message));search();},[]);
 
  useEffect(()=>{if(view==='trips'&&me.user){loadTrips();const t=setInterval(loadTrips,12000);return()=>clearInterval(t)}},[view,me.user?.id,loadTrips]);
 
@@ -100,7 +100,7 @@ export default function Carpool(){
 
  async function saveProfile(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);const d=await mutate('profile',{name:f.get('name'),phone:f.get('phone'),gender},'Profile saved');if(d){await refreshMe();setView('find')}}
 
- async function enableNotifications(){try{setBusy(true);const deviceToken=await enablePushNotifications();await saveNotificationSubscription(deviceToken);toast.success('Notifications enabled on this device.')}catch(e){toast.error(e instanceof Error?e.message:'Could not enable notifications.')}finally{setBusy(false)}}
+ async function enableNotifications(){if(process.env.NEXT_PUBLIC_PREVIEW_MODE==='true'){toast.info('Notifications are disabled in this review demo. No real passengers will be notified.');return}try{setBusy(true);const deviceToken=await enablePushNotifications();await saveNotificationSubscription(deviceToken);toast.success('Notifications enabled on this device.')}catch(e){toast.error(e instanceof Error?e.message:'Could not enable notifications.')}finally{setBusy(false)}}
 
  async function publishRide(e:FormEvent<HTMLFormElement>){e.preventDefault();if(!offerFromPoint||!offerToPoint){toast.error('Choose and confirm both Karachi locations.');return}const f=new FormData(e.currentTarget),data=Object.fromEntries(f);const d=await mutate('create',{...data,originPoint:offerFromPoint,destinationPoint:offerToPoint,seats:Number(data.seats),fare:data.fare===''?null:Number(data.fare),days,stops:String(data.stops).split(',').map(s=>s.trim()).filter(Boolean).join('|')},'Your ride is listed');if(d){setDays([]);setOfferFrom('');setOfferTo('');setOfferFromPoint(null);setOfferToPoint(null);setView('trips');await loadTrips()}}
 

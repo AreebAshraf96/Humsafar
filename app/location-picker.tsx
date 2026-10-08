@@ -5,13 +5,14 @@ import {Combobox,ComboboxInput,ComboboxContent,ComboboxList,ComboboxItem} from '
 import {Dialog,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog';
 import {KARACHI,inKarachi,type Place} from '@/lib/locations';
 import RideMap from './ride-map';
+import {validSession} from '@/lib/supabase-auth';
 
 export default function LocationPicker({label,text,selected,onText,onSelect}:{label:string;text:string;selected:Place|null;onText:(text:string)=>void;onSelect:(place:Place)=>void}){
  const id=useId();const [items,setItems]=useState<Place[]>([]),[loading,setLoading]=useState(false),[error,setError]=useState(''),[open,setOpen]=useState(false),[editing,setEditing]=useState(false),[draft,setDraft]=useState<Place|null>(null),[name,setName]=useState(''),[pinError,setPinError]=useState(''),[locating,setLocating]=useState(false),[latText,setLatText]=useState(''),[lngText,setLngText]=useState('');
  useEffect(()=>{
   const q=text.trim();const controller=new AbortController();setItems([]);setError('');
   if(q.length<3||selected||!open){setLoading(false);return()=>controller.abort()}
-  setLoading(true);const timer=setTimeout(async()=>{try{const r=await fetch('/api/places?'+new URLSearchParams({q}),{signal:controller.signal});const data=await r.json() as {places?:Place[];error?:string};if(!r.ok)throw new Error(data.error||'Search unavailable');if(!controller.signal.aborted)setItems(data.places||[])}catch(e){if(!controller.signal.aborted)setError((e as Error).message)}finally{if(!controller.signal.aborted)setLoading(false)}},600);
+  setLoading(true);const timer=setTimeout(async()=>{try{const session=await validSession();const r=await fetch('/api/places?'+new URLSearchParams({q}),{signal:controller.signal,headers:session?{Authorization:`Bearer ${session.access_token}`}:{}});const data=await r.json() as {places?:Place[];error?:string};if(!r.ok)throw new Error(data.error||'Search unavailable');if(!controller.signal.aborted)setItems(data.places||[])}catch(e){if(!controller.signal.aborted)setError((e as Error).message)}finally{if(!controller.signal.aborted)setLoading(false)}},600);
   return()=>{controller.abort();clearTimeout(timer)};
  },[text,selected,open]);
  function edit(p:Place|null){setDraft(p);setLatText(p?String(p.lat):'');setLngText(p?String(p.lng):'');setName(p?.label||text);setPinError('');setOpen(false);setEditing(true)}

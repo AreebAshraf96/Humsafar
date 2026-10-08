@@ -472,15 +472,10 @@ Deno.serve(async (request: Request) => {
                 token:
                   subscription.device_token,
 
-                notification: {
-                  title:
-                    input.title,
-
-                  body:
-                    input.body,
-                },
-
                 data: {
+                  title: input.title,
+                  body: input.body,
+                  userId: input.userId,
                   url:
                     input.url || "/",
 

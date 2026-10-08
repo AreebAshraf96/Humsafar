@@ -13,16 +13,16 @@ assert.equal(endpointMatches(null,base),false);assert.equal(distanceKm(base,base
 const feature=(p={},coordinates=[67.03,24.85])=>({properties:{name:'Test Mosque',countrycode:'PK',osm_type:'W',osm_id:1,...p},geometry:{type:'Point',coordinates}});
 const parsed=photonPlaces({features:[feature(),feature(),feature({osm_id:2,countrycode:'IN'}),feature({osm_id:3},[74.3,31.5]),feature({osm_id:4},[null,24.85]),{invalid:true}]});
 assert.equal(parsed.length,1);assert.equal(parsed[0].label,'Test Mosque');
-globalThis.__locationTests=locations;
+globalThis.__locationTests={...locations,identity:null};
 let source=readFileSync(new URL('../app/api/places/route.ts',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
-source='const {KARACHI,photonPlaces}=globalThis.__locationTests;\n'+source;
+source='const getAuthenticatedUser=async()=>globalThis.__locationTests.identity;const {KARACHI,photonPlaces}=globalThis.__locationTests;\n'+source;
 const {GET}=await import(url(source));
 const realFetch=globalThis.fetch;const realNow=Date.now;let requests=0,now=1000000;
 Date.now=()=>now;
 globalThis.fetch=async input=>{requests++;const u=new URL(input);assert.equal(u.searchParams.get('countrycode'),'PK');assert.equal(u.searchParams.get('bbox'),`${KARACHI.west},${KARACHI.south},${KARACHI.east},${KARACHI.north}`);return Response.json({features:[feature()]})};
 try{
  const req=q=>new Request('https://test.local/api/places?'+new URLSearchParams({q}));
- assert.equal((await GET(req('ab'))).status,400);assert.equal(requests,0);
+ assert.equal((await GET(req('Test Mosque'))).status,401);globalThis.__locationTests.identity={userId:'test'};assert.equal((await GET(req('ab'))).status,400);assert.equal(requests,0);
  let r=await GET(req('Test Mosque'));assert.equal(r.status,200);assert.equal((await r.json()).places.length,1);assert.equal(requests,1);
  await GET(req('test mosque'));assert.equal(requests,1,'same normalized query served from cache');
  assert.equal((await GET(req('Another mosque'))).status,429,'rapid distinct search throttled');

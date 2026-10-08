@@ -28,26 +28,38 @@ export function saveSession(session: SupabaseSession | null) {
   else localStorage.removeItem(SESSION_KEY);
 }
 
-export async function authRequest(path: string, body?: unknown, token?: string, method?: "POST" | "PUT") {
+export async function authRequest<T = SupabaseSession['user']>(path: string, body?: unknown, token?: string, method?: "POST" | "PUT"): Promise<T> {
   const { url, anonKey } = supabaseConfig();
   const response = await fetch(`${url}/auth/v1/${path}`, {
     method: body === undefined ? "GET" : method || "POST",
     headers: { apikey: anonKey, "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.timeout(12000),
   });
-  const data = await response.json().catch(() => ({}));
+  const data = await response.json().catch(() => ({})) as T & { msg?: string; message?: string; error_description?: string; error?: string };
   if (!response.ok) throw new Error(data.msg || data.message || data.error_description || data.error || "Authentication failed. Please try again.");
   return data;
 }
 
-export async function validSession() {
-  let session = getStoredSession();
+let refreshPending: Promise<SupabaseSession | null> | null = null;
+export async function validSession(): Promise<SupabaseSession | null> {
+  const session = getStoredSession();
   if (!session) return null;
-  if (session.expires_at && session.expires_at < Math.floor(Date.now() / 1000) + 30) {
-    try {
-      session = await authRequest("token?grant_type=refresh_token", { refresh_token: session.refresh_token });
-      saveSession(session);
-    } catch { saveSession(null); return null; }
+  if (!session.expires_at || session.expires_at < Math.floor(Date.now() / 1000) + 60) {
+    if (!refreshPending) refreshPending = (async () => {
+      try {
+        const renewed = await authRequest<SupabaseSession>("token?grant_type=refresh_token", { refresh_token: session!.refresh_token });
+        // A logout or account switch during refresh must never resurrect the
+        // previous session when its network response arrives late.
+        if (getStoredSession()?.refresh_token !== session!.refresh_token) return getStoredSession();
+        saveSession(renewed); return renewed;
+      } catch {
+        if (getStoredSession()?.refresh_token === session!.refresh_token) saveSession(null);
+        return getStoredSession();
+      }
+      finally { refreshPending = null; }
+    })();
+    return refreshPending;
   }
   return session;
 }

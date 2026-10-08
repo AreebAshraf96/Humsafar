@@ -55,3 +55,11 @@ next-env.d.ts
 *.db
 *.key
 *.p12
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Temporary files
+supabase/.temp/
