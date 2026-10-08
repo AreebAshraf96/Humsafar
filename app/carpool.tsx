@@ -36,6 +36,15 @@ type Detail={ride:Ride;own:boolean;booking:Booking|null;passengers:Person[];requ
 
 type Me={user:{id:string;name:string}|null;profile:{name:string;gender:string;phone:string}|null};
 
+type ChatMessage = {
+  id: string;
+  sender_id: string;
+  sender_name: string;
+  body: string;
+  created_at: string;
+};
+
+
 const labels:Record<string,string>={scheduled:'Scheduled',enroute:'Driver on the way',arrived:'Driver has arrived',started:'Trip in progress',ended:'Completed',cancelled:'Cancelled',pending:'Awaiting approval',approved:'Seat approved',declined:'Request declined'};
 
 const genders=['Not specified','Woman','Man','Non-binary'];
@@ -68,9 +77,37 @@ export default function Carpool(){
 
  const [view,setView]=useState('find'),[from,setFrom]=useState(''),[to,setTo]=useState(''),[date,setDate]=useState(pakistanToday()),[rides,setRides]=useState<Ride[]>([]),[trips,setTrips]=useState<Ride[]>([]),[me,setMe]=useState<Me>({user:null,profile:null}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[busy,setBusy]=useState(false),[selected,setSelected]=useState<string|null>(null),[detail,setDetail]=useState<Detail|null>(null),[message,setMessage]=useState(''),[reply,setReply]=useState<Record<string,string>>({}),[gender,setGender]=useState('Not specified'),[days,setDays]=useState<number[]>([]),[shareLink,setShareLink]=useState(''),[tracking,setTracking]=useState(false),[token,setToken]=useState('');
 
+ const [chatMessages,setChatMessages]=useState<ChatMessage[]>([]),[chatError,setChatError]=useState(''),[chatBusy,setChatBusy]=useState(false);
+
  const [fromPoint,setFromPoint]=useState<Place|null>(null),[toPoint,setToPoint]=useState<Place|null>(null),[offerFrom,setOfferFrom]=useState(''),[offerTo,setOfferTo]=useState(''),[offerFromPoint,setOfferFromPoint]=useState<Place|null>(null),[offerToPoint,setOfferToPoint]=useState<Place|null>(null);
 
  const watch=useRef<number|null>(null),lastSent=useRef(0),trackingRide=useRef<string|null>(null),versions=useRef<Record<string,string>>({});
+
+ async function loadChat(rideId:string){
+  const session=await validSession();
+  if(!session)throw new Error('Please sign in again.');
+  const response=await fetch(`/api/chat?rideId=${encodeURIComponent(rideId)}`,{headers:{Authorization:`Bearer ${session.access_token}`},cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.error||'Could not load chat.');
+  setChatMessages(data.messages);
+ }
+
+ async function sendChatMessage(e:FormEvent<HTMLFormElement>){
+  e.preventDefault();
+  const form=e.currentTarget;
+  const body=String(new FormData(form).get('body')||'').trim();
+  if(!detail)return;
+  if(!body){setChatError('Type a message before sending.');return;}
+  const session=await validSession();
+  if(!session){setChatError('Please sign in again.');return;}
+  setChatBusy(true);setChatError('');
+  try{
+   const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${session.access_token}`},body:JSON.stringify({rideId:detail.ride.id,body})});
+   const data=await response.json();
+   if(!response.ok)throw new Error(data.error||'Could not send message.');
+   form.reset();await loadChat(detail.ride.id);
+  }catch(error){setChatError((error as Error).message)}finally{setChatBusy(false)}
+ }
 
  const refreshMe=useCallback(async()=>{const d=await api('action=me');setMe(d);setGender(d.profile?.gender||'Not specified');return d as Me},[]);
 
@@ -79,6 +116,36 @@ export default function Carpool(){
  const loadTrips=useCallback(async()=>{try{const d=await api('action=trips');setTrips(d.rides);for(const r of d.rides){const sig=r.version+':'+(r.booking?.status||'');if(versions.current[r.id]&&versions.current[r.id]!==sig)toast.info(`Your ${r.origin} → ${r.destination} ride has changed. Review its status and passenger list.`);versions.current[r.id]=sig}}catch(e){setError((e as Error).message)}},[]);
 
  const loadDetail=useCallback(async(id:string)=>{const d=await api('action=detail&id='+encodeURIComponent(id));setDetail(d);return d as Detail},[]);
+
+useEffect(() => {
+  const canChat =
+    !!detail && (detail.own || detail.booking?.status === 'approved');
+
+  if (!selected || !canChat) {
+    setChatMessages([]);
+    return;
+  }
+
+  let active = true;
+
+  const refresh = async () => {
+    try {
+      await loadChat(selected);
+    } catch (error) {
+      if (active) setChatError((error as Error).message);
+    }
+  };
+
+  refresh();
+  const timer = setInterval(refresh, 5000);
+
+  return () => {
+    active = false;
+    clearInterval(timer);
+  };
+}, [selected, detail?.own, detail?.booking?.status]);
+
+
 
  useEffect(()=>{const params=new URLSearchParams(location.hash.slice(1));const t=params.get('trip');if(t){setToken(t);return}refreshMe().catch(e=>setError(e.message));search();},[]);
 
@@ -137,6 +204,21 @@ export default function Carpool(){
  {(detail.own||detail.booking?.status==='approved')&&['enroute','arrived','started'].includes(detail.ride.status)&&<><h3>Driver location</h3><LocationStatus ride={detail.ride}/>{detail.own&&<><p className="muted">Sharing makes your location visible to approved passengers. During the trip, their private tracking links can also show it to trusted contacts.</p><button className="outline" onClick={tracking?stopTracking:startTracking}><Navigation size={18}/>{tracking?'Stop location sharing':'Allow & share my location'}</button></>}{detail.ride.sharing===1&&<MapView ride={detail.ride}/>}</>}
 
  {(detail.own||detail.booking?.status==='approved')&&detail.ride.status==='started'&&<div><h3>Share this trip</h3><p className="muted">Shares driver, car, route and latest driver location. Other passengers’ profiles and phone numbers stay private. In this owner-only preview, recipients cannot open links yet.</p><div className="actions"><button className="outline" disabled={busy} onClick={share}><Share2 size={18}/>Create private link</button><button className="subtle" disabled={busy} onClick={async()=>{await mutate('revokeShare',{id:detail.ride.id},'Your links are disabled');setShareLink('')}}>Stop link sharing</button></div>{shareLink&&<label className="field" style={{marginTop:12}}>Private trip link<input readOnly value={shareLink} onFocus={e=>e.target.select()}/><button className="outline" onClick={async()=>{try{await navigator.clipboard.writeText(shareLink);toast.success('Link copied')}catch{toast.info('Select the link above and copy it.')}}}>Copy link</button></label>}</div>}
+
+ {(detail.own||detail.booking?.status==='approved')&&<section className="detailstack" aria-label="Ride chat">
+  <h3>Ride chat</h3>
+  {chatError&&<p className="banner error" role="alert">{chatError}</p>}
+  <div className="formcard" style={{maxHeight:280,overflowY:'auto'}}>
+   {chatMessages.length===0?<p className="muted">No messages yet. Start the conversation.</p>:chatMessages.map(chatMessage=><p key={chatMessage.id}>
+    <strong>{chatMessage.sender_id===me.user?.id?'You':chatMessage.sender_name}</strong>{' · '}{chatMessage.body}
+    <small className="muted" style={{display:'block'}}>{new Date(chatMessage.created_at).toLocaleString('en-PK')}</small>
+   </p>)}
+  </div>
+  <form onSubmit={sendChatMessage}>
+   <label className="field">Message<textarea name="body" maxLength={2000} required placeholder="Write a message to the ride group"/></label>
+   <button className="primary" disabled={chatBusy}>{chatBusy?'Sending…':'Send message'}</button>
+  </form>
+ </section>}
 
  </div>}</DialogContent></Dialog></>;
 
