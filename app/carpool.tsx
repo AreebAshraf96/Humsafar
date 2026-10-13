@@ -6,7 +6,7 @@ import { saveNotificationSubscription } from "@/lib/notification-subscriptions";
 
 import {useCallback,useEffect,useRef,useState, type FormEvent} from 'react';
 
-import {CarFront,ArrowRight,MapPin,Search,Plus,ShieldCheck,Users,ArrowLeftRight,Navigation,Share2,RefreshCw,UserRound,CalendarDays,Check,Clock} from 'lucide-react';
+import {CarFront,ArrowRight,MapPin,Search,Plus,ShieldCheck,Users,ArrowLeftRight,Navigation,Share2,RefreshCw,UserRound,CalendarDays,Check,Clock,MessageCircle,Send} from 'lucide-react';
 
 import {Dialog,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog';
 
@@ -42,6 +42,7 @@ type ChatMessage = {
   sender_name: string;
   body: string;
   created_at: string;
+  read_by: string[];
 };
 
 
@@ -78,6 +79,7 @@ export default function Carpool(){
  const [view,setView]=useState('find'),[from,setFrom]=useState(''),[to,setTo]=useState(''),[date,setDate]=useState(pakistanToday()),[rides,setRides]=useState<Ride[]>([]),[trips,setTrips]=useState<Ride[]>([]),[me,setMe]=useState<Me>({user:null,profile:null}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[busy,setBusy]=useState(false),[selected,setSelected]=useState<string|null>(null),[detail,setDetail]=useState<Detail|null>(null),[message,setMessage]=useState(''),[reply,setReply]=useState<Record<string,string>>({}),[gender,setGender]=useState('Not specified'),[days,setDays]=useState<number[]>([]),[shareLink,setShareLink]=useState(''),[tracking,setTracking]=useState(false),[token,setToken]=useState('');
 
  const [chatMessages,setChatMessages]=useState<ChatMessage[]>([]),[chatError,setChatError]=useState(''),[chatBusy,setChatBusy]=useState(false);
+ const chatEndRef=useRef<HTMLDivElement|null>(null);
 
  const [fromPoint,setFromPoint]=useState<Place|null>(null),[toPoint,setToPoint]=useState<Place|null>(null),[offerFrom,setOfferFrom]=useState(''),[offerTo,setOfferTo]=useState(''),[offerFromPoint,setOfferFromPoint]=useState<Place|null>(null),[offerToPoint,setOfferToPoint]=useState<Place|null>(null);
 
@@ -117,7 +119,7 @@ export default function Carpool(){
 
  const loadDetail=useCallback(async(id:string)=>{const d=await api('action=detail&id='+encodeURIComponent(id));setDetail(d);return d as Detail},[]);
 
-useEffect(() => {
+ useEffect(() => {
   const canChat =
     !!detail && (detail.own || detail.booking?.status === 'approved');
 
@@ -143,11 +145,13 @@ useEffect(() => {
     active = false;
     clearInterval(timer);
   };
-}, [selected, detail?.own, detail?.booking?.status]);
+ }, [selected, detail?.own, detail?.booking?.status]);
+
+ useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:'smooth',block:'nearest'})},[chatMessages]);
 
 
 
- useEffect(()=>{const params=new URLSearchParams(location.hash.slice(1));const t=params.get('trip');if(t){setToken(t);return}refreshMe().catch(e=>setError(e.message));search();},[]);
+ useEffect(()=>{const params=new URLSearchParams(location.hash.slice(1));const t=params.get('trip');if(t){setToken(t);return}const chatRide=new URLSearchParams(location.search).get('chat');if(chatRide)setSelected(chatRide);refreshMe().catch(e=>setError(e.message));search();},[]);
 
  useEffect(()=>{if(view==='trips'&&me.user){loadTrips();const t=setInterval(loadTrips,12000);return()=>clearInterval(t)}},[view,me.user?.id,loadTrips]);
 
@@ -193,7 +197,7 @@ useEffect(() => {
 
  </main><footer><span>humsafar · Shared journeys across Karachi</span><span>Fares in PKR · Times in Pakistan Standard Time</span></footer>
 
- <Dialog open={!!selected} onOpenChange={v=>{if(!v)setSelected(null)}}><DialogContent className="detaildialog sm:max-w-2xl"><DialogTitle>{detail?`${detail.ride.origin} → ${detail.ride.destination}`:'Loading ride…'}</DialogTitle><DialogDescription>{detail?`${dateLabel(detail.ride.date)} · ${detail.ride.time} PKT · ${labels[detail.ride.status]}`:'Fetching the latest ride details.'}</DialogDescription>{detail&&<div className="detailstack"><div className="manifest"><span className="avatar">{initials(detail.ride.driverName)}</span><div><strong>{detail.ride.driverName} · Driver</strong><p className="muted">{detail.ride.driverGender} · {detail.ride.car}{detail.ride.plate?' · '+detail.ride.plate:''}</p></div></div><div className="formgrid"><div><h3>Pickup</h3><p>{detail.ride.pickup}</p><MeetingPin value={detail.ride.origin_point} label="Open pickup pin"/></div><div><h3>Drop-off</h3><p>{detail.ride.dropoff}</p><MeetingPin value={detail.ride.destination_point} label="Open drop-off pin"/></div><div><h3>{money(detail.ride.fare)} / seat</h3><p className="muted">Final fare agreed directly</p></div><div><h3>{detail.ride.seats-detail.ride.occupied} seats available</h3><p className="muted">{detail.ride.occupied} confirmed passengers</p></div></div>{detail.ride.notes&&<p>{detail.ride.notes}</p>}{detail.ride.phone&&<p>Driver contact: <a href={'tel:'+detail.ride.phone}>{detail.ride.phone}</a></p>}<div><h3>Who’s in the car</h3><p className="muted">{detail.passengers.length?detail.passengers.map(p=>p.gender).reduce((a:string[],g:string)=>{if(!a.includes(g))a.push(g);return a},[]).map(g=>`${detail.passengers.filter(p=>p.gender===g).length} ${g==='Woman'?'women':g==='Man'?'men':g.toLowerCase()}`).join(' · '):'No approved passengers yet.'}</p>{detail.passengers.map((p,i)=><div key={i} className="manifest" style={{marginTop:8}}><span className="avatar">{initials(p.name)}</span><div><strong>{p.name}</strong><p className="muted">{p.gender}</p></div></div>)}<p className="muted" style={{marginTop:8}}>Gender is optional and self-described. Profiles and identities are not verified.</p></div>
+ <Dialog open={!!selected} onOpenChange={v=>{if(!v){setSelected(null);const url=new URL(location.href);url.searchParams.delete('chat');history.replaceState(null,'',url)}}}><DialogContent className="detaildialog sm:max-w-2xl"><DialogTitle>{detail?`${detail.ride.origin} → ${detail.ride.destination}`:'Loading ride…'}</DialogTitle><DialogDescription>{detail?`${dateLabel(detail.ride.date)} · ${detail.ride.time} PKT · ${labels[detail.ride.status]}`:'Fetching the latest ride details.'}</DialogDescription>{detail&&<div className="detailstack"><div className="manifest"><span className="avatar">{initials(detail.ride.driverName)}</span><div><strong>{detail.ride.driverName} · Driver</strong><p className="muted">{detail.ride.driverGender} · {detail.ride.car}{detail.ride.plate?' · '+detail.ride.plate:''}</p></div></div><div className="formgrid"><div><h3>Pickup</h3><p>{detail.ride.pickup}</p><MeetingPin value={detail.ride.origin_point} label="Open pickup pin"/></div><div><h3>Drop-off</h3><p>{detail.ride.dropoff}</p><MeetingPin value={detail.ride.destination_point} label="Open drop-off pin"/></div><div><h3>{money(detail.ride.fare)} / seat</h3><p className="muted">Final fare agreed directly</p></div><div><h3>{detail.ride.seats-detail.ride.occupied} seats available</h3><p className="muted">{detail.ride.occupied} confirmed passengers</p></div></div>{detail.ride.notes&&<p>{detail.ride.notes}</p>}{detail.ride.phone&&<p>Driver contact: <a href={'tel:'+detail.ride.phone}>{detail.ride.phone}</a></p>}<div><h3>Who’s in the car</h3><p className="muted">{detail.passengers.length?detail.passengers.map(p=>p.gender).reduce((a:string[],g:string)=>{if(!a.includes(g))a.push(g);return a},[]).map(g=>`${detail.passengers.filter(p=>p.gender===g).length} ${g==='Woman'?'women':g==='Man'?'men':g.toLowerCase()}`).join(' · '):'No approved passengers yet.'}</p>{detail.passengers.map((p,i)=><div key={i} className="manifest" style={{marginTop:8}}><span className="avatar">{initials(p.name)}</span><div><strong>{p.name}</strong><p className="muted">{p.gender}</p></div></div>)}<p className="muted" style={{marginTop:8}}>Gender is optional and self-described. Profiles and identities are not verified.</p></div>
 
  {!detail.own&&(!detail.booking||['cancelled','declined'].includes(detail.booking.status))&&detail.ride.status==='scheduled'&&<form onSubmit={async e=>{e.preventDefault();if(!me.profile){setSelected(null);setView('profile');toast.info('Save your profile first.');return}await mutate('request',{id:detail.ride.id,message},'Seat request sent to the driver')}}><label className="field">Message the driver<textarea required maxLength={600} value={message} onChange={e=>setMessage(e.target.value)} placeholder="Confirm your pickup, drop-off and proposed fare."/></label><button disabled={busy} className="primary" style={{marginTop:12}}>Request one seat</button><p className="muted">Your seat is reserved only when the driver approves.</p></form>}
 
@@ -205,18 +209,30 @@ useEffect(() => {
 
  {(detail.own||detail.booking?.status==='approved')&&detail.ride.status==='started'&&<div><h3>Share this trip</h3><p className="muted">Shares driver, car, route and latest driver location. Other passengers’ profiles and phone numbers stay private. In this owner-only preview, recipients cannot open links yet.</p><div className="actions"><button className="outline" disabled={busy} onClick={share}><Share2 size={18}/>Create private link</button><button className="subtle" disabled={busy} onClick={async()=>{await mutate('revokeShare',{id:detail.ride.id},'Your links are disabled');setShareLink('')}}>Stop link sharing</button></div>{shareLink&&<label className="field" style={{marginTop:12}}>Private trip link<input readOnly value={shareLink} onFocus={e=>e.target.select()}/><button className="outline" onClick={async()=>{try{await navigator.clipboard.writeText(shareLink);toast.success('Link copied')}catch{toast.info('Select the link above and copy it.')}}}>Copy link</button></label>}</div>}
 
- {(detail.own||detail.booking?.status==='approved')&&<section className="detailstack" aria-label="Ride chat">
-  <h3>Ride chat</h3>
-  {chatError&&<p className="banner error" role="alert">{chatError}</p>}
-  <div className="formcard" style={{maxHeight:280,overflowY:'auto'}}>
-   {chatMessages.length===0?<p className="muted">No messages yet. Start the conversation.</p>:chatMessages.map(chatMessage=><p key={chatMessage.id}>
-    <strong>{chatMessage.sender_id===me.user?.id?'You':chatMessage.sender_name}</strong>{' · '}{chatMessage.body}
-    <small className="muted" style={{display:'block'}}>{new Date(chatMessage.created_at).toLocaleString('en-PK')}</small>
-   </p>)}
+ {(detail.own||detail.booking?.status==='approved')&&<section className="ride-chat" aria-label="Ride chat">
+  <header className="ride-chat-header">
+   <span className="ride-chat-heading-icon"><MessageCircle size={20}/></span>
+   <div><h3>Ride chat</h3><p>Driver and approved passengers</p></div>
+   <span className="ride-chat-tag">Ride group</span>
+  </header>
+  {chatError&&<p className="banner error ride-chat-error" role="alert">{chatError}</p>}
+  <div className="ride-chat-messages" role="log" aria-live="polite" aria-label="Chat messages">
+   {chatMessages.length===0?<div className="ride-chat-empty"><MessageCircle size={27}/><strong>No messages yet</strong><span>Say hello to everyone on this ride.</span></div>:chatMessages.map(chatMessage=>{
+    const ownMessage=chatMessage.sender_id===me.user?.id;
+    return <div key={chatMessage.id} className={`ride-chat-row ${ownMessage?'is-own':''}`}>
+     <div className="ride-chat-bubble">
+      {!ownMessage&&<span className="ride-chat-sender">{chatMessage.sender_name}</span>}
+      <p>{chatMessage.body}</p>
+      <time dateTime={chatMessage.created_at}>{new Date(chatMessage.created_at).toLocaleTimeString('en-PK',{hour:'numeric',minute:'2-digit'})}</time>
+      {ownMessage&&chatMessage.read_by.length>0&&<span className="ride-chat-receipt">Seen by {chatMessage.read_by.join(', ')}</span>}
+     </div>
+    </div>;
+   })}
+   <div ref={chatEndRef}/>
   </div>
-  <form onSubmit={sendChatMessage}>
-   <label className="field">Message<textarea name="body" maxLength={2000} required placeholder="Write a message to the ride group"/></label>
-   <button className="primary" disabled={chatBusy}>{chatBusy?'Sending…':'Send message'}</button>
+  <form className="ride-chat-composer" onSubmit={sendChatMessage}>
+   <textarea name="body" rows={1} maxLength={2000} required aria-label="Message" placeholder="Write a message…" className="ride-chat-input" onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/>
+   <button className="ride-chat-send" type="submit" disabled={chatBusy} aria-label="Send message" title="Send message"><Send size={18}/></button>
   </form>
  </section>}
 

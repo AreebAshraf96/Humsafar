@@ -2,7 +2,8 @@ export type NotificationCategory =
   | "seat_requests"
   | "booking_updates"
   | "driver_status"
-  | "trip_reminders";
+  | "trip_reminders"
+  | "chat_messages";
 
 export type SendNotificationInput = {
   userId: string;

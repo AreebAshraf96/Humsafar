@@ -1,4 +1,6 @@
+import { waitUntil } from 'cloudflare:workers';
 import { ApiError } from '@/lib/supabase-server';
+import { sendManyHumsafarNotifications } from '@/lib/notifications-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,7 +68,9 @@ async function rest<T>(url: string, key: string, authorization: string, init?: R
     if (response.status === 404) throw new ApiError('Ride chat not found.', 404);
     throw new ApiError('Chat is temporarily unavailable. Please try again.', 503);
   }
-  return response.json() as Promise<T>;
+  if (response.status === 204 || response.headers.get('content-length') === '0') return undefined as T;
+  const responseText = await response.text();
+  return (responseText ? JSON.parse(responseText) : undefined) as T;
 }
 
 function failure(error: unknown) {
@@ -80,7 +84,7 @@ export async function GET(request: Request) {
   try {
     const rideId = new URL(request.url).searchParams.get('rideId') || '';
     if (!uuidPattern.test(rideId)) throw new ApiError('Choose a valid ride.', 400);
-    const { authorization, url, key } = await verifiedUser(request);
+    const { userId, authorization, url, key } = await verifiedUser(request);
     const query = new URLSearchParams({
       select: 'id,ride_id,sender_id,body,created_at',
       ride_id: `eq.${rideId}`,
@@ -92,10 +96,48 @@ export async function GET(request: Request) {
       key,
       authorization,
     );
-    const senderIds = [...new Set(messages.map(message => message.sender_id))];
+    let readReceipts: Array<{ message_id: string; reader_id: string }> = [];
+    if (messages.length) {
+      const messageIds = messages.map(message => message.id);
+      const receiptsQuery = new URLSearchParams({
+        select: 'message_id,reader_id',
+        ride_id: `eq.${rideId}`,
+        message_id: `in.(${messageIds.join(',')})`,
+      });
+      try {
+        readReceipts = await rest<Array<{ message_id: string; reader_id: string }>>(
+          `${url}/rest/v1/ride_message_reads?${receiptsQuery}`,
+          key,
+          authorization,
+        );
+        const alreadyRead = new Set(readReceipts.map(receipt => `${receipt.message_id}:${receipt.reader_id}`));
+        const unreadMessages = messages.filter(message =>
+          message.sender_id !== userId && !alreadyRead.has(`${message.id}:${userId}`),
+        );
+        if (unreadMessages.length) {
+          await rest(`${url}/rest/v1/ride_message_reads?on_conflict=message_id%2Creader_id`, key, authorization, {
+            method: 'POST',
+            headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+            body: JSON.stringify(unreadMessages.map(message => ({
+              ride_id: rideId,
+              message_id: message.id,
+              reader_id: userId,
+            }))),
+          });
+          readReceipts.push(...unreadMessages.map(message => ({ message_id: message.id, reader_id: userId })));
+        }
+      } catch (error) {
+        // A missing read-receipt migration must not prevent the chat history from loading.
+        console.error('Chat read receipts unavailable', error instanceof Error ? error.message : 'Unknown error');
+      }
+    }
+    const profileIds = [...new Set([
+      ...messages.map(message => message.sender_id),
+      ...readReceipts.map(receipt => receipt.reader_id),
+    ])];
     const names = new Map<string, string>();
-    if (senderIds.length) {
-      const profilesQuery = new URLSearchParams({ select: 'id,name', id: `in.(${senderIds.join(',')})` });
+    if (profileIds.length) {
+      const profilesQuery = new URLSearchParams({ select: 'id,name', id: `in.(${profileIds.join(',')})` });
       const profiles = await rest<Array<{ id: string; name: string }>>(
         `${url}/rest/v1/profiles?${profilesQuery}`,
         key,
@@ -106,6 +148,9 @@ export async function GET(request: Request) {
     return json({ messages: messages.map(message => ({
       ...message,
       sender_name: names.get(message.sender_id) || 'Humsafar user',
+      read_by: [...new Set(readReceipts
+        .filter(receipt => receipt.message_id === message.id && receipt.reader_id !== message.sender_id)
+        .map(receipt => names.get(receipt.reader_id) || 'Ride participant'))],
     })) });
   } catch (error) { return failure(error); }
 }
@@ -138,6 +183,25 @@ export async function POST(request: Request) {
       },
     );
     if (!inserted[0]) throw new ApiError('Could not send that message.', 503);
+    try {
+      const recipients = await rest<Array<{ user_id: string }>>(
+        `${url}/rest/v1/rpc/humsafar_chat_notification_targets`,
+        key,
+        authorization,
+        { method: 'POST', body: JSON.stringify({ p_ride_id: input.rideId }) },
+      );
+      if (recipients.length) {
+        waitUntil(sendManyHumsafarNotifications(recipients.map(recipient => recipient.user_id), {
+          title: 'New ride chat message',
+          body: 'Open Humsafar to read the latest message.',
+          category: 'chat_messages',
+          url: `/?chat=${encodeURIComponent(input.rideId)}`,
+        }));
+      }
+    } catch (error) {
+      // Push delivery is best-effort and must not undo a sent message.
+      console.error('Could not queue ride chat notifications', error instanceof Error ? error.message : 'Unknown error');
+    }
     return json({ message: inserted[0] }, 201);
   } catch (error) { return failure(error); }
 }

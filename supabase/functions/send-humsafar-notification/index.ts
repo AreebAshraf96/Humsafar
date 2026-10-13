@@ -5,7 +5,8 @@ type NotificationCategory =
   | "seat_requests"
   | "booking_updates"
   | "driver_status"
-  | "trip_reminders";
+  | "trip_reminders"
+  | "chat_messages";
 
 type NotificationRequest = {
   userId: string;
@@ -32,6 +33,7 @@ type NotificationSettings = {
   booking_updates: boolean;
   driver_status: boolean;
   trip_reminders: boolean;
+  chat_messages: boolean;
 };
 
 const VALID_CATEGORIES: NotificationCategory[] = [
@@ -39,6 +41,7 @@ const VALID_CATEGORIES: NotificationCategory[] = [
   "booking_updates",
   "driver_status",
   "trip_reminders",
+  "chat_messages",
 ];
 
 const corsHeaders = {
@@ -372,7 +375,7 @@ Deno.serve(async (request: Request) => {
       } = await supabase
         .from("notification_settings")
         .select(
-          "seat_requests,booking_updates,driver_status,trip_reminders"
+          "seat_requests,booking_updates,driver_status,trip_reminders,chat_messages"
         )
         .eq(
           "user_id",
