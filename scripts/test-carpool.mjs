@@ -16,6 +16,8 @@ try {
  const originPoint={id:'test:clifton',label:'Dolmen Mall Clifton',address:'Karachi',lat:24.8021172,lng:67.0302623,source:'pin'};
  const destinationPoint={id:'test:ubl',label:'UBL City Building',address:'Karachi',lat:24.8492715,lng:67.0013189,source:'pin'};
  const listing={originPoint,destinationPoint,date:tomorrow,time:'23:30',seats:1,fare:null,car:'White Corolla',plate:'TEST-123',pickup:'Public gate',dropoff:'Office entrance',days:[]};
+ await db.query("insert into public.driver_verifications(user_id,vehicle_registration_number,status) values($1,'TEST-123','approved')",[driver]);
+ await denied(()=>rpc(p2,'create',listing),'42501');
  await rpc(driver,'create',listing);
  const ride=(await rpc(p1,'rides',{date:tomorrow})).rides[0];
  check(ride.id,'ride created');check(ride.plate===undefined&&ride.lat===undefined&&ride.phone===undefined,'private fields excluded');
@@ -28,7 +30,7 @@ try {
  await denied(()=>asUser(p1,"insert into public.bookings(ride,passenger,status) values($1,$2,'approved')",[ride.id,p1]),'42501');
  await denied(()=>asUser(p1,"update public.rides set seats=8 where id=$1",[ride.id]),'42501');
  await denied(()=>asUser(p1,"select plate,lat from public.rides"),'42501');
- await denied(()=>asUser(p1,"select name from public.profiles"),'42501');
+ await denied(()=>asUser(p1,"select gender from public.profiles"),'42501');
  await denied(()=>asUser(p1,"insert into public.shares(token,ride,owner,expires) values('fake',$1,$2,9999999999999)",[ride.id,p1]),'42501');
  await rpc(p1,'request',{id:ride.id,message:'Rs 300?'});
  await rpc(p2,'request',{id:ride.id,message:'Second request'});

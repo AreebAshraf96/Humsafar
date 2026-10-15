@@ -34,3 +34,9 @@ The Edge Function uses Deno (`npm:` imports). Its types are excluded from the we
 ## Review status
 
 `npm run demo` uses your real Supabase Auth with isolated local PostgreSQL ride data. It does not apply these migrations, change your live project or send real notifications. Demo approval and deployment are separate from merging.
+
+## Automated driver checks
+
+Apply `20261015_driver_verification_automation.sql` after the original `20261015_driver_verification.sql` migration. The server integration contract is in `DRIVER_VERIFICATION_MODEL.md`. Humsafar sends the private licence and selfie to the configured self-hosted model endpoint; it never sends them to a model provider on your behalf. Configure `SUPABASE_SERVICE_ROLE_KEY`, `DRIVER_VERIFICATION_MODEL_URL`, and `DRIVER_VERIFICATION_MODEL_KEY` as server-only secrets. Do not add these to browser-prefixed variables or commit their values.
+
+Only a valid, non-expired expiry date with sufficient OCR confidence and a face match above the configured score can be automatically approved. Other cases remain pending for admin review. The model endpoint must use HTTPS in production, avoid retaining images/face templates/OCR text, and be evaluated on representative Sindh licence images before enabling automatic approval.

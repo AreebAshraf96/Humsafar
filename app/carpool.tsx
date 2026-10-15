@@ -19,6 +19,8 @@ import {Toaster,toast} from 'sonner';
 import {pakistanToday} from '@/lib/domain';
 
 import RideMap from './ride-map';
+import Link from 'next/link';
+import {useRouter} from 'next/navigation';
 
 import LocationPicker from './location-picker';
 
@@ -76,6 +78,8 @@ function SharedTracker({token}:{token:string}){const [ride,setRide]=useState<Rid
 
 export default function Carpool(){
 
+ const router=useRouter();
+
  const [view,setView]=useState('find'),[from,setFrom]=useState(''),[to,setTo]=useState(''),[date,setDate]=useState(pakistanToday()),[rides,setRides]=useState<Ride[]>([]),[trips,setTrips]=useState<Ride[]>([]),[me,setMe]=useState<Me>({user:null,profile:null}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[busy,setBusy]=useState(false),[selected,setSelected]=useState<string|null>(null),[detail,setDetail]=useState<Detail|null>(null),[message,setMessage]=useState(''),[reply,setReply]=useState<Record<string,string>>({}),[gender,setGender]=useState('Not specified'),[days,setDays]=useState<number[]>([]),[shareLink,setShareLink]=useState(''),[tracking,setTracking]=useState(false),[token,setToken]=useState('');
 
  const [chatMessages,setChatMessages]=useState<ChatMessage[]>([]),[chatError,setChatError]=useState(''),[chatBusy,setChatBusy]=useState(false);
@@ -89,9 +93,9 @@ export default function Carpool(){
   const session=await validSession();
   if(!session)throw new Error('Please sign in again.');
   const response=await fetch(`/api/chat?rideId=${encodeURIComponent(rideId)}`,{headers:{Authorization:`Bearer ${session.access_token}`},cache:'no-store'});
-  const data=await response.json();
+  const data=await response.json() as {error?:string;messages?:ChatMessage[]};
   if(!response.ok)throw new Error(data.error||'Could not load chat.');
-  setChatMessages(data.messages);
+  setChatMessages(data.messages||[]);
  }
 
  async function sendChatMessage(e:FormEvent<HTMLFormElement>){
@@ -105,7 +109,7 @@ export default function Carpool(){
   setChatBusy(true);setChatError('');
   try{
    const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${session.access_token}`},body:JSON.stringify({rideId:detail.ride.id,body})});
-   const data=await response.json();
+   const data=await response.json() as {error?:string;message?:unknown};
    if(!response.ok)throw new Error(data.error||'Could not send message.');
    form.reset();await loadChat(detail.ride.id);
   }catch(error){setChatError((error as Error).message)}finally{setChatBusy(false)}
@@ -167,6 +171,19 @@ export default function Carpool(){
 
  function needProfile(next:string){if(!me.user){setView('profile');return false}if(!me.profile){setView('profile');toast.info('Save your profile to continue.');return false}setView(next);return true}
 
+ async function openRideOffer(){
+  if(!needProfile('offer'))return;
+  try{
+   const session=await validSession();
+   if(!session)throw new Error('Please sign in again.');
+   const response=await fetch('/api/driver-verification',{headers:{Authorization:`Bearer ${session.access_token}`},cache:'no-store'});
+   const data=await response.json() as {error?:string;status?:string};
+   if(!response.ok)throw new Error(data.error||'Could not check driver verification.');
+   if(data.status==='approved')setView('offer');
+   else router.push('/driver-verification');
+  }catch(error){toast.error((error as Error).message);setView('find')}
+ }
+
  async function openRide(id:string){if(!me.user){setView('profile');return}setMessage('');setSelected(id);}
 
  async function saveProfile(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);const d=await mutate('profile',{name:f.get('name'),phone:f.get('phone'),gender},'Profile saved');if(d){await refreshMe();setView('find')}}
@@ -185,9 +202,9 @@ export default function Carpool(){
 
  const signIn=<div className="emptycard"><UserRound size={38}/><h2>Sign in to travel together</h2><p>Create a verified Humsafar account or sign in to continue.</p><a className="primary" href="/auth">Sign in or create account</a></div>;
 
- return <><Toaster richColors position="top-center"/><header className="topbar"><a className="brand" href="/"><span className="brand-icon"><CarFront/></span>humsafar<span className="urdu">ہم سفر</span></a><nav><button className={view==='find'?'navactive':''} onClick={()=>setView('find')}>Find a ride</button><button className={view==='trips'?'navactive':''} onClick={()=>needProfile('trips')}>My trips</button><button className={view==='profile'?'navactive':''} onClick={()=>setView('profile')}>{me.profile?.name.split(' ')[0]||'Account'}</button></nav><button className="outline" onClick={()=>needProfile('offer')}><Plus size={18}/>Offer a ride</button></header><main className="shell"><div className="intro"><div><p className="eyebrow">GOOD COMPANY. SHARED JOURNEYS.</p><h1>{view==='find'?'Your route. Your people.':view==='offer'?'Got room for company?':view==='trips'?'Your shared journeys.':'A little about you.'}</h1><p>{view==='find'?'Find a seat with someone heading your way.':view==='offer'?'Set your route. Choose your days. Approve your passengers.':view==='trips'?'Manage requests, meet your driver, and follow your trip.':'Help your fellow travellers know who they’re riding with.'}</p></div><span className="free-label">Free to connect · Karachi pilot</span></div>{error&&<div className="banner error" role="alert">{error}<button className="subtle" onClick={()=>setError('')}>Dismiss</button></div>}{tracking&&<div className="banner"><Navigation size={17} style={{display:'inline',marginRight:8}}/>Your device is sharing location. Keep this page open.<button className="subtle" onClick={stopTracking}>Stop sharing</button></div>}
+ return <><Toaster richColors position="top-center"/><header className="topbar"><a className="brand" href="/"><span className="brand-icon"><CarFront/></span>humsafar<span className="urdu">ہم سفر</span></a><nav><button className={view==='find'?'navactive':''} onClick={()=>setView('find')}>Find a ride</button><button className={view==='trips'?'navactive':''} onClick={()=>needProfile('trips')}>My trips</button><Link className="nav-link" href="/driver-verification">Driver verification</Link><button className={view==='profile'?'navactive':''} onClick={()=>setView('profile')}>{me.profile?.name.split(' ')[0]||'Account'}</button></nav><button className="outline" onClick={openRideOffer}><Plus size={18}/>Offer a ride</button></header><main className="shell"><div className="intro"><div><p className="eyebrow">GOOD COMPANY. SHARED JOURNEYS.</p><h1>{view==='find'?'Your route. Your people.':view==='offer'?'Got room for company?':view==='trips'?'Your shared journeys.':'A little about you.'}</h1><p>{view==='find'?'Find a seat with someone heading your way.':view==='offer'?'Set your route. Choose your days. Approve your passengers.':view==='trips'?'Manage requests, meet your driver, and follow your trip.':'Help your fellow travellers know who they’re riding with.'}</p></div><span className="free-label">Free to connect · Karachi pilot</span></div>{error&&<div className="banner error" role="alert">{error}<button className="subtle" onClick={()=>setError('')}>Dismiss</button></div>}{tracking&&<div className="banner"><Navigation size={17} style={{display:'inline',marginRight:8}}/>Your device is sharing location. Keep this page open.<button className="subtle" onClick={stopTracking}>Stop sharing</button></div>}
 
- {view==='find'&&<><form className="searchbar" onSubmit={e=>{e.preventDefault();if((from.trim()&&!fromPoint)||(to.trim()&&!toPoint)){toast.error('Choose a dropdown result or confirm a map pin for each location.');return}search()}}><LocationPicker label="Leaving from" text={from} selected={fromPoint} onText={s=>{setFrom(s);setFromPoint(null)}} onSelect={p=>{setFrom(p.label);setFromPoint(p)}}/><button className="swap" type="button" aria-label="Swap departure and destination" onClick={()=>{setFrom(to);setTo(from);setFromPoint(toPoint);setToPoint(fromPoint)}}><ArrowLeftRight size={20}/></button><LocationPicker label="Going to" text={to} selected={toPoint} onText={s=>{setTo(s);setToPoint(null)}} onSelect={p=>{setTo(p.label);setToPoint(p)}}/><label><span>Travel date</span><input aria-label="Travel date" type="date" min={pakistanToday()} required value={date} onChange={e=>setDate(e.target.value)}/></label><button disabled={loading} className="primary"><Search size={19}/>{loading?'Searching…':'Find rides'}</button></form><div className="workspace"><section><div className="sectionhead"><h2>{loading?'Looking for your ride…':`${rides.length} ${rides.length===1?'ride':'rides'} available`}</h2><span>Driver approval on every booking</span></div>{loading?<p className="loading" role="status">Loading available rides…</p>:rides.length?rides.map(r=><RideCard key={r.id} ride={r} onOpen={()=>openRide(r.id)}/>):<div className="emptycard"><CarFront size={42}/><h2>Be part of the first shared journeys.</h2><p>No rides match this date and route yet. Try another date or offer a ride.</p><button className="outline" onClick={()=>needProfile('offer')}><Plus size={17}/>Offer the first ride</button></div>}<p className="muted" style={{marginTop:16}}>Karachi pilot: choose exact places or map pins. Results match pickup and drop-off points within 1 km of your choices, not the full driving route. Leave both fields empty to browse all Karachi rides.</p></section><aside><div className="darkcard"><ShieldCheck size={30}/><h2>Know your ride.<br/>Share your journey.</h2><p>See who’s travelling before you request a seat. Follow your driver on the way to pickup.</p><div className="safetyrow"><Users size={20}/>Passenger details before booking</div><div className="safetyrow"><MapPin size={20}/>Location sharing with consent</div></div><div className="note"><h3>Your fare, your agreement.</h3><p>Discuss the fare directly with your driver. No platform payments or subscriptions.</p><ArrowRight size={20}/></div><MapView/></aside></div></>}
+ {view==='find'&&<><form className="searchbar" onSubmit={e=>{e.preventDefault();if((from.trim()&&!fromPoint)||(to.trim()&&!toPoint)){toast.error('Choose a dropdown result or confirm a map pin for each location.');return}search()}}><LocationPicker label="Leaving from" text={from} selected={fromPoint} onText={s=>{setFrom(s);setFromPoint(null)}} onSelect={p=>{setFrom(p.label);setFromPoint(p)}}/><button className="swap" type="button" aria-label="Swap departure and destination" onClick={()=>{setFrom(to);setTo(from);setFromPoint(toPoint);setToPoint(fromPoint)}}><ArrowLeftRight size={20}/></button><LocationPicker label="Going to" text={to} selected={toPoint} onText={s=>{setTo(s);setToPoint(null)}} onSelect={p=>{setTo(p.label);setToPoint(p)}}/><label><span>Travel date</span><input aria-label="Travel date" type="date" min={pakistanToday()} required value={date} onChange={e=>setDate(e.target.value)}/></label><button disabled={loading} className="primary"><Search size={19}/>{loading?'Searching…':'Find rides'}</button></form><div className="workspace"><section><div className="sectionhead"><h2>{loading?'Looking for your ride…':`${rides.length} ${rides.length===1?'ride':'rides'} available`}</h2><span>Driver approval on every booking</span></div>{loading?<p className="loading" role="status">Loading available rides…</p>:rides.length?rides.map(r=><RideCard key={r.id} ride={r} onOpen={()=>openRide(r.id)}/>):<div className="emptycard"><CarFront size={42}/><h2>Be part of the first shared journeys.</h2><p>No rides match this date and route yet. Try another date or offer a ride.</p><button className="outline" onClick={openRideOffer}><Plus size={17}/>Offer the first ride</button></div>}<p className="muted" style={{marginTop:16}}>Karachi pilot: choose exact places or map pins. Results match pickup and drop-off points within 1 km of your choices, not the full driving route. Leave both fields empty to browse all Karachi rides.</p></section><aside><div className="darkcard"><ShieldCheck size={30}/><h2>Know your ride.<br/>Share your journey.</h2><p>See who’s travelling before you request a seat. Follow your driver on the way to pickup.</p><div className="safetyrow"><Users size={20}/>Passenger details before booking</div><div className="safetyrow"><MapPin size={20}/>Location sharing with consent</div></div><div className="note"><h3>Your fare, your agreement.</h3><p>Discuss the fare directly with your driver. No platform payments or subscriptions.</p><ArrowRight size={20}/></div><MapView/></aside></div></>}
 
  {view==='profile'&&(!me.user?signIn:<form className="formcard" onSubmit={saveProfile} key={me.profile?.name||'new'}><h2>Your traveller profile</h2><div className="formgrid"><Field label="Public display name" name="name" placeholder="Your first name" defaultValue={me.profile?.name}/><SelectField label="Gender (optional, self-described)" value={gender} onChange={setGender} options={genders}/><Field label="Phone (optional)" name="phone" placeholder="+923001234567" defaultValue={me.profile?.phone} required={false}/><p className="muted">Your display name and gender appear to signed-in travellers. Your phone is shared only with your driver, or approved passengers on rides you drive.</p></div>{me.profile&&<p className="muted" style={{marginTop:16}}>Current profile: {me.profile.name} · {me.profile.gender} · {me.profile.phone||'No phone added'}</p>}<div className="actions"><button disabled={busy} className="primary">Save profile</button><button type="button" disabled={busy} className="outline" onClick={enableNotifications}>Enable notifications</button><a className="subtle" href="/auth?logout=1">Sign out</a></div></form>)}
 
