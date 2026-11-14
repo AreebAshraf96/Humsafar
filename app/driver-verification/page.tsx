@@ -9,7 +9,7 @@ type Application = {
   id?: string; status: 'not_submitted' | 'pending' | 'approved' | 'rejected' | 'action_required';
   vehicle_registration_number?: string; review_reason?: string | null; submitted_at?: string; reviewed_at?: string | null;
   licence_expiry_date?: string | null;
-  automated_result?: { state?: 'not_run' | 'clear_pass' | 'needs_review' | 'unavailable'; reasonCode?: string; faceMatchStatus?: string | null };
+  automated_result?: { state?: 'not_run' | 'clear_pass' | 'needs_review' | 'unavailable'; reasonCode?: string; faceMatchStatus?: string | null; faceMatchScore?: number | null; expiryConfidence?: number | null };
 };
 
 const statusLabels: Record<Application['status'], string> = {
@@ -136,6 +136,30 @@ export default function DriverVerificationPage() {
     finally { setBusy(false); }
   }
 
+  async function retryAutomation() {
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const session = await validSession();
+      if (!session) { location.replace('/auth'); return; }
+      const response = await fetch('/api/driver-verification', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'retry_automation' }),
+      });
+      const text = await response.text();
+      let data: Record<string, unknown> = {};
+      try { data = text ? JSON.parse(text) as Record<string, unknown> : {}; }
+      catch { data = { error: text || 'The server returned an unreadable response.' }; }
+      if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Could not retry automated checks.');
+      const updated = data as unknown as Application;
+      setApplication(current => ({ ...current, ...updated }));
+      setMessage(updated.status === 'approved'
+        ? 'Automated checks passed. Your driver verification is approved.'
+        : 'Checks ran again. Your application remains pending for administrator review.');
+    } catch (error) { setError((error as Error).message); }
+    finally { setBusy(false); }
+  }
+
   const canSubmit = ['not_submitted','rejected','action_required'].includes(application.status);
   return <main className="verification-shell">
     <Link className="verification-back" href="/"><ArrowLeft size={17}/> Back to Humsafar</Link>
@@ -146,6 +170,9 @@ export default function DriverVerificationPage() {
       {application.automated_result && application.automated_result.state !== 'not_run' && <div className="banner" role="status">
         <strong>{application.automated_result.state === 'clear_pass' ? 'Automated checks passed' : application.automated_result.state === 'unavailable' ? 'Automated checks unavailable' : 'Admin review required'}</strong>
         {application.licence_expiry_date && <p>Licence expiry date read: {new Date(`${application.licence_expiry_date}T00:00:00`).toLocaleDateString('en-PK')}.</p>}
+        {application.automated_result.faceMatchStatus && <p>Selfie and licence photo: {application.automated_result.faceMatchStatus.replaceAll('_', ' ')}{typeof application.automated_result.faceMatchScore === 'number' ? ` · cosine similarity ${application.automated_result.faceMatchScore.toFixed(3)}` : ''}.</p>}
+        {typeof application.automated_result.expiryConfidence === 'number' && <p>Expiry date OCR engine confidence: {(application.automated_result.expiryConfidence * 100).toFixed(0)}%.</p>}
+        {application.automated_result.reasonCode && application.automated_result.reasonCode !== 'all_checks_passed' && <p>Reason: {application.automated_result.reasonCode.replaceAll('_', ' ')}.</p>}
         {application.automated_result.state !== 'clear_pass' && <p>We could not confirm every check automatically. Your application will be reviewed by an administrator.</p>}
       </div>}
       {application.review_reason && <div className="banner error" role="alert"><strong>Reviewer feedback</strong><p>{application.review_reason}</p>{application.reviewed_at && <small>Reviewed {new Date(application.reviewed_at).toLocaleString('en-PK')}</small>}</div>}
@@ -159,7 +186,11 @@ export default function DriverVerificationPage() {
         <label className="verification-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/> I consent to Humsafar securely storing my documents and processing them with its self-hosted service to read the licence expiry date and compare my selfie with the licence photo. Clear checks may be approved automatically; uncertain results go to an administrator. This is not official government authentication.</label>
         {error && <p className="banner error" role="alert">{error}</p>}{message && <p className="banner" role="status">{message}</p>}
         <button className="primary" disabled={busy||!consent}>{busy?'Uploading securely…':application.status==='not_submitted'?'Submit for review':'Resubmit for review'}</button>
-      </form> : application.status === 'pending' ? <p className="muted">Your application is in the review queue. You cannot submit another application while review is pending.</p> : null}
+      </form> : application.status === 'pending' ? <>
+        <p className="muted">Your application is in the review queue. You cannot submit another application while review is pending.</p>
+        {application.automated_result?.state === 'unavailable' && <button type="button" className="primary" disabled={busy} onClick={retryAutomation}>{busy ? 'Retrying checks…' : 'Retry automated checks'}</button>}
+        {error && <p className="banner error" role="alert">{error}</p>}{message && <p className="banner" role="status">{message}</p>}
+      </> : null}
       <p className="verification-retention">Privacy: documents stay in private storage, are available only to you and authorized reviewers, and are eligible for deletion 90 days after approval or rejection. You can contact Humsafar to request earlier deletion.</p>
     </section>
   </main>;

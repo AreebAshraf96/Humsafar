@@ -91,7 +91,8 @@ export default function AdminDriverVerificationsPage() {
             <div className="banner" aria-label="Automated verification result">
               <strong>Automated checks: {application.automated_result?.state?.replaceAll('_', ' ') || 'not run'}</strong>
               <p>Licence expiry: {application.licence_expiry_date ? new Date(`${application.licence_expiry_date}T00:00:00`).toLocaleDateString('en-PK') : 'not read'}</p>
-              <p>Face comparison: {application.automated_result?.faceMatchStatus || 'not available'}{typeof application.automated_result?.faceMatchScore === 'number' ? ` · ${application.automated_result.faceMatchScore.toFixed(1)}%` : ''}</p>
+              <p>Face comparison: {application.automated_result?.faceMatchStatus || 'not available'}{typeof application.automated_result?.faceMatchScore === 'number' ? ` · cosine similarity ${application.automated_result.faceMatchScore.toFixed(3)}` : ''}</p>
+              {typeof application.automated_result?.expiryConfidence === 'number' && <p>Expiry OCR engine confidence: {(application.automated_result.expiryConfidence * 100).toFixed(0)}%</p>}
               {application.automated_result?.reasonCode && application.automated_result.reasonCode !== 'all_checks_passed' && <small>Review reason: {application.automated_result.reasonCode.replaceAll('_', ' ')}</small>}
             </div>
             <div className="admin-verification-images">

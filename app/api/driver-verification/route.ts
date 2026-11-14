@@ -48,6 +48,49 @@ export async function POST(request: Request) {
     const payload = await request.json() as {
       action?: string; licencePath?: string; selfiePath?: string; registration?: string; paths?: string[];
     };
+    if (payload.action === 'retry_automation') {
+      if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        throw new DriverVerificationError('Automated verification is not configured on the server.', 503);
+      }
+      const existing = await supabaseRequest<Array<{
+        id: string; status: string; licence_storage_path: string | null; selfie_storage_path: string | null;
+        automated_result: { state?: string } | null;
+      }>>(context, `/rest/v1/driver_verifications?select=id,status,licence_storage_path,selfie_storage_path,automated_result&user_id=eq.${context.userId}&limit=1`);
+      const application = existing[0];
+      if (!application || application.status !== 'pending' || application.automated_result?.state !== 'unavailable') {
+        throw new DriverVerificationError('Only a pending application with unavailable automated checks can be retried.', 409);
+      }
+      const { licence_storage_path: licencePath, selfie_storage_path: selfiePath } = application;
+      if (!licencePath || !selfiePath || !uploadPathPattern(context.userId).test(licencePath)
+        || !uploadPathPattern(context.userId).test(selfiePath)) {
+        throw new DriverVerificationError('The stored verification documents are unavailable. Please contact an administrator.', 409);
+      }
+      const [licenceImage, selfieImage] = await Promise.all([
+        readStoredImage(context, licencePath), readStoredImage(context, selfiePath),
+      ]);
+      const automation = await runAutomatedVerification(context, licenceImage, selfieImage);
+      const autoApproved = automation.state === 'clear_pass';
+      const retentionUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+      try {
+        await serviceRoleRequest(context, `/rest/v1/driver_verifications?id=eq.${application.id}&user_id=eq.${context.userId}&status=eq.pending`, {
+          method: 'PATCH', headers: { Prefer: 'return=minimal' },
+          body: JSON.stringify({
+            status: autoApproved ? 'approved' : 'pending',
+            licence_expiry_date: automation.licenceExpiryDate,
+            automated_result: automation,
+            automated_checked_at: automation.checkedAt,
+            ...(autoApproved ? { reviewed_at: automation.checkedAt, retention_until: retentionUntil } : {}),
+            updated_at: automation.checkedAt,
+          }),
+        });
+      } catch {
+        throw new DriverVerificationError('The checks ran, but Humsafar could not save the result. Check the server database configuration.', 503);
+      }
+      return Response.json({
+        id: application.id, status: autoApproved ? 'approved' : 'pending',
+        automated_result: automation, licence_expiry_date: automation.licenceExpiryDate,
+      }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     if (payload.action === 'cleanup') {
       const paths = Array.isArray(payload.paths) ? payload.paths : [];
       if (paths.some(path => typeof path !== 'string' || !uploadPathPattern(context!.userId).test(path))) {

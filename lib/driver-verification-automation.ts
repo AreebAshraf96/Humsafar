@@ -79,7 +79,7 @@ export async function runAutomatedVerification(
   const faceMatchStatus = ['match', 'no_match', 'no_face', 'multiple_faces', 'uncertain'].includes(String(output.faceMatchStatus))
     ? output.faceMatchStatus as AutomatedVerification['faceMatchStatus'] : null;
   const faceMatchScore = typeof output.faceMatchScore === 'number' && Number.isFinite(output.faceMatchScore)
-    && output.faceMatchScore >= 0 && output.faceMatchScore <= 100 ? output.faceMatchScore : null;
+    && output.faceMatchScore >= -1 && output.faceMatchScore <= 1 ? output.faceMatchScore : null;
 
   const pakistanDateParts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -87,9 +87,9 @@ export async function runAutomatedVerification(
   const datePart = (type: string) => pakistanDateParts.find(part => part.type === type)?.value || '';
   const today = `${datePart('year')}-${datePart('month')}-${datePart('day')}`;
   const minimumOcrConfidence = Number(process.env.DRIVER_VERIFICATION_OCR_MIN_CONFIDENCE || '0.9');
-  const minimumFaceScore = Number(process.env.DRIVER_VERIFICATION_FACE_MIN_SCORE || '95');
+  const minimumFaceScore = Number(process.env.DRIVER_VERIFICATION_FACE_MIN_SCORE || '0.383');
   const validThresholds = minimumOcrConfidence >= 0 && minimumOcrConfidence <= 1
-    && minimumFaceScore >= 0 && minimumFaceScore <= 100;
+    && minimumFaceScore >= -1 && minimumFaceScore <= 1;
   const clearPass = validThresholds && !!expiry && expiry >= today
     && expiryConfidence !== null && expiryConfidence >= minimumOcrConfidence
     && faceMatchStatus === 'match' && faceMatchScore !== null && faceMatchScore >= minimumFaceScore;
