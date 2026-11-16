@@ -4,8 +4,8 @@ This service provides the `/verify` endpoint used by the Humsafar app. It runs O
 
 ## What it checks
 
-- Tesseract OCR looks for a numeric date near English or Urdu expiry labels on a Pakistan/Sindh licence. It returns no date when the result is ambiguous. Its confidence is an OCR engine score, not a probability.
-- OpenCV YuNet detects faces; OpenCV SFace aligns and compares exactly one face from each image. Extra or missing faces are sent for manual review. The returned score is cosine similarity (`-1` to `1`), not a percentage. A review band around the matching threshold reduces automatic decisions near the threshold.
+- Tesseract OCR looks for a numeric or English month-name date near English or Urdu expiry labels on a Pakistan/Sindh licence. It returns no date when the result is ambiguous. Its confidence is an OCR engine score, not a probability.
+- OpenCV YuNet checks image orientations and detects at a normalized image size to better handle close-up selfies and small printed licence portraits; OpenCV SFace aligns and compares exactly one face from each image. Extra or missing faces are sent for manual review. The returned score is cosine similarity (`-1` to `1`), not a percentage. A review band around the matching threshold reduces automatic decisions near the threshold.
 - All uncertain cases remain pending for an administrator. The app should be calibrated with representative licence images before enabling automatic approval in production.
 
 ## Run on Windows for local development
@@ -14,7 +14,7 @@ From the Humsafar project folder, in PowerShell:
 
 ```powershell
 cd verification-model
-docker build -t humsafar-verification .
+docker build --no-cache -t humsafar-verification .
 $env:DRIVER_VERIFICATION_MODEL_KEY = "paste-a-long-random-secret-here"
 docker run --rm -p 8000:8000 -e DRIVER_VERIFICATION_MODEL_KEY=$env:DRIVER_VERIFICATION_MODEL_KEY humsafar-verification
 ```
