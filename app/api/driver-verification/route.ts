@@ -14,8 +14,8 @@ export async function GET(request: Request) {
     const rows = await supabaseRequest<Array<{
       id: string; status: string; vehicle_registration_number: string; review_reason: string | null;
       submitted_at: string; reviewed_at: string | null; retention_until: string | null;
-      licence_expiry_date: string | null; automated_result: AutomatedVerification; automated_checked_at: string | null;
-    }>>(context, `/rest/v1/driver_verifications?select=id,status,vehicle_registration_number,review_reason,submitted_at,reviewed_at,retention_until,licence_expiry_date,automated_result,automated_checked_at&user_id=eq.${context.userId}&limit=1`);
+      automated_result: AutomatedVerification; automated_checked_at: string | null;
+    }>>(context, `/rest/v1/driver_verifications?select=id,status,vehicle_registration_number,review_reason,submitted_at,reviewed_at,retention_until,automated_result,automated_checked_at&user_id=eq.${context.userId}&limit=1`);
     const application = rows[0];
     return Response.json(application || { status: 'not_submitted' }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) { return verificationFailure(error); }
@@ -69,17 +69,14 @@ export async function POST(request: Request) {
         readStoredImage(context, licencePath), readStoredImage(context, selfiePath),
       ]);
       const automation = await runAutomatedVerification(context, licenceImage, selfieImage);
-      const autoApproved = automation.state === 'clear_pass';
-      const retentionUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
       try {
         await serviceRoleRequest(context, `/rest/v1/driver_verifications?id=eq.${application.id}&user_id=eq.${context.userId}&status=eq.pending`, {
           method: 'PATCH', headers: { Prefer: 'return=minimal' },
           body: JSON.stringify({
-            status: autoApproved ? 'approved' : 'pending',
-            licence_expiry_date: automation.licenceExpiryDate,
+            status: 'pending',
+            licence_expiry_date: null,
             automated_result: automation,
             automated_checked_at: automation.checkedAt,
-            ...(autoApproved ? { reviewed_at: automation.checkedAt, retention_until: retentionUntil } : {}),
             updated_at: automation.checkedAt,
           }),
         });
@@ -87,8 +84,7 @@ export async function POST(request: Request) {
         throw new DriverVerificationError('The checks ran, but Humsafar could not save the result. Check the server database configuration.', 503);
       }
       return Response.json({
-        id: application.id, status: autoApproved ? 'approved' : 'pending',
-        automated_result: automation, licence_expiry_date: automation.licenceExpiryDate,
+        id: application.id, status: 'pending', automated_result: automation,
       }, { headers: { 'Cache-Control': 'no-store' } });
     }
     if (payload.action === 'cleanup') {
@@ -119,8 +115,8 @@ export async function POST(request: Request) {
     const automation: AutomatedVerification = process.env.SUPABASE_SERVICE_ROLE_KEY
       ? await runAutomatedVerification(context, licenceImage, selfieImage)
       : {
-          state: 'unavailable', reasonCode: 'server_database_key_missing', licenceExpiryDate: null,
-          expiryConfidence: null, faceMatchStatus: null, faceMatchScore: null, checkedAt: new Date().toISOString(),
+        state: 'unavailable', reasonCode: 'server_database_key_missing',
+          faceMatchStatus: null, faceMatchScore: null, checkedAt: new Date().toISOString(),
         };
 
     const result = await supabaseRequest<{
@@ -136,18 +132,15 @@ export async function POST(request: Request) {
     await removeUploadedDocuments(context, [result.old_licence_storage_path, result.old_selfie_storage_path].filter((path): path is string => !!path));
     let savedAutomation = false;
     if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      const autoApproved = automation.state === 'clear_pass';
-      const retentionUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
       try {
         await serviceRoleRequest(context, `/rest/v1/driver_verifications?id=eq.${result.id}&user_id=eq.${context.userId}`, {
           method: 'PATCH',
           headers: { Prefer: 'return=minimal' },
           body: JSON.stringify({
-            status: autoApproved ? 'approved' : 'pending',
-            licence_expiry_date: automation.licenceExpiryDate,
+            status: 'pending',
+            licence_expiry_date: null,
             automated_result: automation,
             automated_checked_at: automation.checkedAt,
-            ...(autoApproved ? { reviewed_at: automation.checkedAt, retention_until: retentionUntil } : {}),
             updated_at: automation.checkedAt,
           }),
         });
@@ -157,11 +150,9 @@ export async function POST(request: Request) {
         // automation metadata fails, keep it pending for an admin to review.
       }
     }
-    const finalStatus = savedAutomation && automation.state === 'clear_pass' ? 'approved' : 'pending';
     return Response.json({
-      id: result.id, status: finalStatus, submitted_at: result.submitted_at,
+      id: result.id, status: 'pending', submitted_at: result.submitted_at,
       automated_result: savedAutomation ? automation : { ...automation, state: 'unavailable' as const, reasonCode: 'result_save_failed' },
-      licence_expiry_date: savedAutomation ? automation.licenceExpiryDate : null,
     }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     return verificationFailure(error);

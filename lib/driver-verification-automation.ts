@@ -1,32 +1,22 @@
 import type { VerificationContext } from '@/lib/driver-verification-server';
 
 export type AutomatedVerification = {
-  state: 'clear_pass' | 'needs_review' | 'unavailable';
+  state: 'needs_review' | 'unavailable';
   reasonCode: string;
-  licenceExpiryDate: string | null;
-  expiryConfidence: number | null;
   faceMatchStatus: 'match' | 'no_match' | 'no_face' | 'multiple_faces' | 'uncertain' | null;
   faceMatchScore: number | null;
   checkedAt: string;
 };
 
 type ModelResponse = {
-  licenceExpiryDate?: unknown;
-  expiryConfidence?: unknown;
   faceMatchStatus?: unknown;
   faceMatchScore?: unknown;
 };
 
-function isDateOnly(value: unknown): value is string {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
-}
-
 function unavailable(reasonCode: string): AutomatedVerification {
   return {
-    state: 'unavailable', reasonCode, licenceExpiryDate: null, expiryConfidence: null,
-    faceMatchStatus: null, faceMatchScore: null, checkedAt: new Date().toISOString(),
+    state: 'unavailable', reasonCode, faceMatchStatus: null, faceMatchScore: null,
+    checkedAt: new Date().toISOString(),
   };
 }
 
@@ -73,41 +63,23 @@ export async function runAutomatedVerification(
     return unavailable('model_response_invalid');
   }
 
-  const expiry = isDateOnly(output.licenceExpiryDate) ? output.licenceExpiryDate : null;
-  const expiryConfidence = typeof output.expiryConfidence === 'number' && Number.isFinite(output.expiryConfidence)
-    && output.expiryConfidence >= 0 && output.expiryConfidence <= 1 ? output.expiryConfidence : null;
   const faceMatchStatus = ['match', 'no_match', 'no_face', 'multiple_faces', 'uncertain'].includes(String(output.faceMatchStatus))
     ? output.faceMatchStatus as AutomatedVerification['faceMatchStatus'] : null;
   const faceMatchScore = typeof output.faceMatchScore === 'number' && Number.isFinite(output.faceMatchScore)
     && output.faceMatchScore >= -1 && output.faceMatchScore <= 1 ? output.faceMatchScore : null;
-
-  const pakistanDateParts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date());
-  const datePart = (type: string) => pakistanDateParts.find(part => part.type === type)?.value || '';
-  const today = `${datePart('year')}-${datePart('month')}-${datePart('day')}`;
-  const minimumOcrConfidence = Number(process.env.DRIVER_VERIFICATION_OCR_MIN_CONFIDENCE || '0.9');
   const minimumFaceScore = Number(process.env.DRIVER_VERIFICATION_FACE_MIN_SCORE || '0.383');
-  const validThresholds = minimumOcrConfidence >= 0 && minimumOcrConfidence <= 1
-    && minimumFaceScore >= -1 && minimumFaceScore <= 1;
-  const clearPass = validThresholds && !!expiry && expiry >= today
-    && expiryConfidence !== null && expiryConfidence >= minimumOcrConfidence
-    && faceMatchStatus === 'match' && faceMatchScore !== null && faceMatchScore >= minimumFaceScore;
+  const validThreshold = minimumFaceScore >= -1 && minimumFaceScore <= 1;
 
-  let reasonCode = 'checks_need_review';
-  if (!validThresholds) reasonCode = 'threshold_configuration_invalid';
-  else if (!expiry) reasonCode = 'expiry_date_not_read';
-  else if (expiry < today) reasonCode = 'licence_expired';
-  else if (expiryConfidence === null || expiryConfidence < minimumOcrConfidence) reasonCode = 'expiry_confidence_low';
-  else if (faceMatchStatus !== 'match' || faceMatchScore === null || faceMatchScore < minimumFaceScore) reasonCode = 'face_match_needs_review';
+  let reasonCode = 'face_match_needs_review';
+  if (!validThreshold) reasonCode = 'threshold_configuration_invalid';
+  else if (faceMatchStatus === 'match' && faceMatchScore !== null && faceMatchScore >= minimumFaceScore) {
+    reasonCode = 'face_match_passed_license_review_required';
+  }
 
+  // Face similarity is advisory. A human must still inspect the licence and
+  // confirm its expiry and authenticity before approving the driver.
   return {
-    state: clearPass ? 'clear_pass' : 'needs_review',
-    reasonCode: clearPass ? 'all_checks_passed' : reasonCode,
-    licenceExpiryDate: expiry,
-    expiryConfidence,
-    faceMatchStatus,
-    faceMatchScore,
+    state: 'needs_review', reasonCode, faceMatchStatus, faceMatchScore,
     checkedAt: new Date().toISOString(),
   };
 }

@@ -3,16 +3,12 @@ from __future__ import annotations
 import hmac
 import io
 import os
-import re
-from datetime import date
 from pathlib import Path
 
 import cv2
 import numpy as np
-import pytesseract
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
-from pytesseract import Output
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = ROOT / "models"
@@ -130,124 +126,6 @@ def face_check(licence: np.ndarray, selfie: np.ndarray) -> tuple[str, float | No
     return "uncertain", round(similarity, 6)
 
 
-MONTH_PATTERN = r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
-DATE_PATTERN = re.compile(
-    rf"(?<!\d)(?:(?P<day>\d{{1,2}})[./\s-]+(?P<month>\d{{1,2}}|{MONTH_PATTERN})[./,\s-]+(?P<year>\d{{4}})|"
-    rf"(?P<iso_year>\d{{4}})[./-](?P<iso_month>\d{{1,2}}|{MONTH_PATTERN})[./-](?P<iso_day>\d{{1,2}}))(?!\d)",
-    re.I,
-)
-EXPIRY_LABEL = re.compile(r"expiry|expires|exp\.?|valid\s*(?:until|till|upto)|\bvalidity\b|تاریخ\s*(?:میعاد|اختتام)|میعاد|اختتام", re.I)
-
-
-def parse_date(match: re.Match[str]) -> date | None:
-    try:
-        if match.group("iso_year"):
-            year = int(match.group("iso_year"))
-            month_text = match.group("iso_month")
-            day = int(match.group("iso_day"))
-        else:
-            day = int(match.group("day"))
-            month_text = match.group("month")
-            year = int(match.group("year"))
-        month_names = {
-            "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-            "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
-        }
-        month = int(month_text) if month_text.isdigit() else month_names[month_text[:3].lower()]
-        return date(year, month, day)
-    except (TypeError, ValueError):
-        return None
-
-
-def read_expiry(image: np.ndarray) -> tuple[str | None, float | None]:
-    # Keep OCR text and confidence values in request memory only; neither is returned or logged.
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    enlarged = cv2.resize(gray, None, fx=1.7, fy=1.7, interpolation=cv2.INTER_CUBIC)
-    data = pytesseract.image_to_data(enlarged, lang="eng+urd", config="--psm 6", output_type=Output.DICT)
-    lines: dict[tuple[int, int, int, int], list[dict[str, object]]] = {}
-    for index, raw_token in enumerate(data["text"]):
-        token = raw_token.strip()
-        if not token:
-            continue
-        line_key = tuple(int(data[key][index]) for key in ("page_num", "block_num", "par_num", "line_num"))
-        lines.setdefault(line_key, []).append({
-            "text": token,
-            "confidence": float(data["conf"][index]),
-            "left": int(data["left"][index]),
-            "top": int(data["top"][index]),
-            "width": int(data["width"][index]),
-            "height": int(data["height"][index]),
-        })
-
-    def geometry(start: int, end: int, segments: list[tuple[int, int, dict[str, object]]]) -> dict[str, float] | None:
-        words = [word for word_start, word_end, word in segments if word_start < end and word_end > start]
-        if not words:
-            return None
-        left = min(int(word["left"]) for word in words)
-        top = min(int(word["top"]) for word in words)
-        right = max(int(word["left"]) + int(word["width"]) for word in words)
-        bottom = max(int(word["top"]) + int(word["height"]) for word in words)
-        confidence = min(float(word["confidence"]) for word in words if float(word["confidence"]) >= 0) if any(
-            float(word["confidence"]) >= 0 for word in words
-        ) else -1.0
-        return {
-            "x": (left + right) / 2, "y": (top + bottom) / 2,
-            "width": right - left, "height": bottom - top, "confidence": confidence,
-        }
-
-    date_candidates: list[tuple[date, dict[str, float]]] = []
-    expiry_labels: list[dict[str, float]] = []
-    for words in lines.values():
-        line_text = ""
-        segments: list[tuple[int, int, dict[str, object]]] = []
-        for word in words:
-            if line_text:
-                line_text += " "
-            start = len(line_text)
-            line_text += str(word["text"])
-            segments.append((start, len(line_text), word))
-
-        for match in DATE_PATTERN.finditer(line_text):
-            parsed = parse_date(match)
-            box = geometry(match.start(), match.end(), segments)
-            if parsed and box and box["confidence"] >= 0:
-                date_candidates.append((parsed, box))
-        for match in EXPIRY_LABEL.finditer(line_text):
-            box = geometry(match.start(), match.end(), segments)
-            if box:
-                expiry_labels.append(box)
-
-    if not date_candidates or not expiry_labels:
-        return None, None
-
-    # Pair the expiry label with the closest date in image coordinates. This
-    # keeps a nearby issue date from being mistaken for (or making ambiguous)
-    # the separate Valid Upto date on Sindh licence layouts.
-    paired: list[tuple[date, dict[str, float], float]] = []
-    max_dx = max(enlarged.shape[1] * 0.08, 180)
-    max_dy = max(enlarged.shape[0] * 0.12, 180)
-    for parsed, date_box in date_candidates:
-        nearby_labels = []
-        for label_box in expiry_labels:
-            dx = abs(date_box["x"] - label_box["x"])
-            dy = date_box["y"] - label_box["y"]
-            if dx <= max_dx and -max(date_box["height"], label_box["height"]) <= dy <= max_dy:
-                distance = dx / max_dx + max(0.0, dy) / max_dy
-                nearby_labels.append(distance)
-        if nearby_labels:
-            paired.append((parsed, date_box, min(nearby_labels)))
-
-    if not paired:
-        return None, None
-    paired.sort(key=lambda item: item[2])
-    if len(paired) > 1 and abs(paired[0][2] - paired[1][2]) < 0.15:
-        return None, None
-    parsed, box, _ = paired[0]
-    # Tesseract's engine confidence is a heuristic, not a probability of legal validity.
-    confidence = box["confidence"] / 100.0
-    return parsed.isoformat(), round(max(0.0, min(confidence, 1.0)), 4)
-
-
 @app.post("/verify")
 async def verify(
     licence: UploadFile = File(...),
@@ -265,16 +143,11 @@ async def verify(
     licence_image = await read_image(licence)
     selfie_image = await read_image(selfie)
     try:
-        expiry, expiry_confidence = read_expiry(licence_image)
         face_status, face_score = face_check(licence_image, selfie_image)
         return {
-            "licenceExpiryDate": expiry,
-            "expiryConfidence": expiry_confidence,
             "faceMatchStatus": face_status,
             "faceMatchScore": face_score,
         }
-    except pytesseract.TesseractNotFoundError:
-        raise HTTPException(status_code=503, detail="OCR engine is not installed") from None
     finally:
-        # Drop references promptly; do not write images, OCR text, or face embeddings to disk.
+        # Drop references promptly; do not write images or face embeddings to disk.
         del licence_image, selfie_image

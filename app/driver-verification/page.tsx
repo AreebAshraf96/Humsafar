@@ -8,8 +8,7 @@ import Link from 'next/link';
 type Application = {
   id?: string; status: 'not_submitted' | 'pending' | 'approved' | 'rejected' | 'action_required';
   vehicle_registration_number?: string; review_reason?: string | null; submitted_at?: string; reviewed_at?: string | null;
-  licence_expiry_date?: string | null;
-  automated_result?: { state?: 'not_run' | 'clear_pass' | 'needs_review' | 'unavailable'; reasonCode?: string; faceMatchStatus?: string | null; faceMatchScore?: number | null; expiryConfidence?: number | null };
+  automated_result?: { state?: 'not_run' | 'needs_review' | 'unavailable'; reasonCode?: string; faceMatchStatus?: string | null; faceMatchScore?: number | null };
 };
 
 const statusLabels: Record<Application['status'], string> = {
@@ -115,9 +114,7 @@ export default function DriverVerificationPage() {
       }));
       const application = data as unknown as Application;
       setApplication(application);
-      setMessage(application.status === 'approved'
-        ? 'Automated checks passed. Your driver verification is approved.'
-        : 'Your documents were submitted. An administrator will review the results.');
+      setMessage('Your documents were submitted. An administrator will check the licence and face comparison before deciding.');
       if (licencePreviewUrl.current) URL.revokeObjectURL(licencePreviewUrl.current); licencePreviewUrl.current = null; setLicencePreview(null);
       if (selfiePreviewUrl.current) URL.revokeObjectURL(selfiePreviewUrl.current); selfiePreviewUrl.current = null; setSelfiePreview(null);
       form.reset(); setConsent(false);
@@ -153,9 +150,7 @@ export default function DriverVerificationPage() {
       if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Could not retry automated checks.');
       const updated = data as unknown as Application;
       setApplication(current => ({ ...current, ...updated }));
-      setMessage(updated.status === 'approved'
-        ? 'Automated checks passed. Your driver verification is approved.'
-        : 'Checks ran again. Your application remains pending for administrator review.');
+      setMessage('The face comparison ran again. Your application remains pending for administrator review.');
     } catch (error) { setError((error as Error).message); }
     finally { setBusy(false); }
   }
@@ -165,15 +160,13 @@ export default function DriverVerificationPage() {
     <Link className="verification-back" href="/"><ArrowLeft size={17}/> Back to Humsafar</Link>
     <section className="verification-card">
       <div className="verification-title"><span><ShieldCheck size={23}/></span><div><p className="eyebrow">DRIVER SAFETY</p><h1>Driver verification</h1></div></div>
-      <p className="verification-intro">Submit a licence image, a selfie, and your vehicle registration number. Humsafar’s self-hosted verification service checks the licence expiry date and compares the two faces. Clear passes can be approved automatically; uncertain results go to an administrator.</p>
+      <p className="verification-intro">Submit a licence image, a selfie, and your vehicle registration number. Humsafar’s self-hosted service compares the selfie with the licence portrait. An administrator checks the licence expiry and details before deciding your application.</p>
       <div className={`verification-status status-${application.status}`} role="status"><FileCheck2 size={20}/><div><strong>{statusLabels[application.status]}</strong>{application.submitted_at && <small>Submitted {new Date(application.submitted_at).toLocaleString('en-PK')}</small>}</div></div>
       {application.automated_result && application.automated_result.state !== 'not_run' && <div className="banner" role="status">
-        <strong>{application.automated_result.state === 'clear_pass' ? 'Automated checks passed' : application.automated_result.state === 'unavailable' ? 'Automated checks unavailable' : 'Admin review required'}</strong>
-        {application.licence_expiry_date && <p>Licence expiry date read: {new Date(`${application.licence_expiry_date}T00:00:00`).toLocaleDateString('en-PK')}.</p>}
+        <strong>{application.automated_result.state === 'unavailable' ? 'Automated face check unavailable' : 'Face comparison result'}</strong>
         {application.automated_result.faceMatchStatus && <p>Selfie and licence photo: {application.automated_result.faceMatchStatus.replaceAll('_', ' ')}{typeof application.automated_result.faceMatchScore === 'number' ? ` · cosine similarity ${application.automated_result.faceMatchScore.toFixed(3)}` : ''}.</p>}
-        {typeof application.automated_result.expiryConfidence === 'number' && <p>Expiry date OCR engine confidence: {(application.automated_result.expiryConfidence * 100).toFixed(0)}%.</p>}
-        {application.automated_result.reasonCode && application.automated_result.reasonCode !== 'all_checks_passed' && <p>Reason: {application.automated_result.reasonCode.replaceAll('_', ' ')}.</p>}
-        {application.automated_result.state !== 'clear_pass' && <p>We could not confirm every check automatically. Your application will be reviewed by an administrator.</p>}
+        {application.automated_result.reasonCode && <p>Reason: {application.automated_result.reasonCode.replaceAll('_', ' ')}.</p>}
+        <p>An administrator must review the licence expiry and details before approval.</p>
       </div>}
       {application.review_reason && <div className="banner error" role="alert"><strong>Reviewer feedback</strong><p>{application.review_reason}</p>{application.reviewed_at && <small>Reviewed {new Date(application.reviewed_at).toLocaleString('en-PK')}</small>}</div>}
       {application.status === 'approved' && <div className="banner verification-approved"><CheckCircle2 size={18}/> Your driver profile is approved. You can publish rides now.</div>}
@@ -183,12 +176,12 @@ export default function DriverVerificationPage() {
           <div className="field"><label htmlFor="selfie-image">Selfie</label><input ref={selfieInput} id="selfie-image" name="selfie" type="file" accept="image/jpeg,image/png,image/webp" required capture="user" onChange={e=>{const file=e.currentTarget.files?.[0]||null;if(file&&(file.size>5*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type))){e.currentTarget.value='';setError('Choose a JPG, PNG, or WebP image up to 5 MB.');return}setError('');if(selfiePreviewUrl.current)URL.revokeObjectURL(selfiePreviewUrl.current);selfiePreviewUrl.current=file?URL.createObjectURL(file):null;setSelfiePreview(selfiePreviewUrl.current)}}/><small>Face visible, good lighting. Maximum 5 MB.</small>{selfiePreview&&<><img className="verification-image-preview" src={selfiePreview} alt="Selfie preview"/><button type="button" className="subtle" onClick={()=>{if(selfieInput.current)selfieInput.current.value='';if(selfiePreviewUrl.current)URL.revokeObjectURL(selfiePreviewUrl.current);selfiePreviewUrl.current=null;setSelfiePreview(null)}}>Remove / retake</button></>}</div>
           <label className="field span2">Vehicle registration number<input name="vehicleRegistration" required minLength={3} maxLength={20} pattern="[A-Za-z0-9 -]{3,20}" value={registration} onChange={e=>setRegistration(e.target.value.toUpperCase())} placeholder="e.g. ABC-123"/><small>Use the registration number of the vehicle you intend to drive.</small></label>
         </div>
-        <label className="verification-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/> I consent to Humsafar securely storing my documents and processing them with its self-hosted service to read the licence expiry date and compare my selfie with the licence photo. Clear checks may be approved automatically; uncertain results go to an administrator. This is not official government authentication.</label>
+        <label className="verification-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/> I consent to Humsafar securely storing my documents and processing them with its self-hosted service to compare my selfie with the licence photo. An administrator will check the licence expiry and details before deciding. This is not official government authentication.</label>
         {error && <p className="banner error" role="alert">{error}</p>}{message && <p className="banner" role="status">{message}</p>}
         <button className="primary" disabled={busy||!consent}>{busy?'Uploading securely…':application.status==='not_submitted'?'Submit for review':'Resubmit for review'}</button>
       </form> : application.status === 'pending' ? <>
         <p className="muted">Your application is in the review queue. You cannot submit another application while review is pending.</p>
-        {application.automated_result?.state === 'unavailable' && <button type="button" className="primary" disabled={busy} onClick={retryAutomation}>{busy ? 'Retrying checks…' : 'Retry automated checks'}</button>}
+        {application.automated_result?.state === 'unavailable' && <button type="button" className="primary" disabled={busy} onClick={retryAutomation}>{busy ? 'Retrying face comparison…' : 'Retry face comparison'}</button>}
         {error && <p className="banner error" role="alert">{error}</p>}{message && <p className="banner" role="status">{message}</p>}
       </> : null}
       <p className="verification-retention">Privacy: documents stay in private storage, are available only to you and authorized reviewers, and are eligible for deletion 90 days after approval or rejection. You can contact Humsafar to request earlier deletion.</p>

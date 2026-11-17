@@ -10,9 +10,8 @@ type Application = {
   id: string; user_id: string; driver_name: string; licence_url: string | null; selfie_url: string | null;
   vehicle_registration_number: string | null; status: string; review_reason: string | null; submitted_at: string;
   reviewed_at: string | null; retention_until: string | null; history: ReviewHistory[];
-  licence_expiry_date: string | null;
   automated_result: {
-    state?: string; reasonCode?: string; expiryConfidence?: number | null;
+    state?: string; reasonCode?: string;
     faceMatchStatus?: string | null; faceMatchScore?: number | null;
   } | null;
 };
@@ -80,7 +79,7 @@ export default function AdminDriverVerificationsPage() {
     <Link className="verification-back" href="/"><ArrowLeft size={17}/> Back to Humsafar</Link>
     <section className="verification-card admin-verification-card">
       <div className="verification-title"><span><ShieldCheck size={23}/></span><div><p className="eyebrow">ADMIN REVIEW</p><h1>Driver applications</h1></div><button className="outline" onClick={()=>void load()} disabled={loading}><RefreshCw size={16}/>Refresh</button></div>
-      <p className="verification-intro">Review the automated expiry-date and face-match checks alongside the documents. Clear passes may already be approved; uncertain or unavailable checks remain in this queue. Signed image links expire after 30 minutes.</p>
+      <p className="verification-intro">Use the face comparison as an aid, then inspect the licence image yourself to confirm its expiry and details before approving. No application is approved automatically. Signed image links expire after 30 minutes.</p>
       {error && <p className="banner error" role="alert">{error}</p>}{notice && <p className="banner" role="status">{notice}</p>}
       {loading && applications.length===0 ? <p className="muted">Loading applications…</p> : applications.length === 0 ? <p className="emptycard">There are no verification applications yet.</p> : <div className="admin-verification-list">
         {applications.map(application => {
@@ -90,10 +89,8 @@ export default function AdminDriverVerificationsPage() {
             <p><strong>Vehicle registration:</strong> {application.vehicle_registration_number || 'Deleted under the retention policy'}</p>
             <div className="banner" aria-label="Automated verification result">
               <strong>Automated checks: {application.automated_result?.state?.replaceAll('_', ' ') || 'not run'}</strong>
-              <p>Licence expiry: {application.licence_expiry_date ? new Date(`${application.licence_expiry_date}T00:00:00`).toLocaleDateString('en-PK') : 'not read'}</p>
               <p>Face comparison: {application.automated_result?.faceMatchStatus || 'not available'}{typeof application.automated_result?.faceMatchScore === 'number' ? ` · cosine similarity ${application.automated_result.faceMatchScore.toFixed(3)}` : ''}</p>
-              {typeof application.automated_result?.expiryConfidence === 'number' && <p>Expiry OCR engine confidence: {(application.automated_result.expiryConfidence * 100).toFixed(0)}%</p>}
-              {application.automated_result?.reasonCode && application.automated_result.reasonCode !== 'all_checks_passed' && <small>Review reason: {application.automated_result.reasonCode.replaceAll('_', ' ')}</small>}
+              {application.automated_result?.reasonCode && <small>Review reason: {application.automated_result.reasonCode.replaceAll('_', ' ')}</small>}
             </div>
             <div className="admin-verification-images">
               {application.licence_url ? <figure><a href={application.licence_url} target="_blank" rel="noreferrer"><img src={application.licence_url} alt="Submitted driving licence"/></a><figcaption>Driving licence · signed private link</figcaption></figure> : <p className="muted">Licence image was purged.</p>}
