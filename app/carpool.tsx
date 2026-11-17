@@ -18,7 +18,7 @@ import {Toaster,toast} from 'sonner';
 
 import {pakistanToday} from '@/lib/domain';
 
-import RideMap from './ride-map';
+import TripMap from './trip-map';
 import RideChat from './ride-chat';
 import {AdminRequestsLink} from './verification-nav';
 import Link from 'next/link';
@@ -60,7 +60,7 @@ function SelectField({label,value,onChange,options}: {label:string;value:string;
 
 function Field({label,name,type='text',value,defaultValue,onChange,required=true,placeholder,min,max}: {label:string;name?:string;type?:string;value?:string|number;defaultValue?:string;onChange?:(s:string)=>void;required?:boolean;placeholder?:string;min?:string|number;max?:string|number}){return <label className="field">{label}<input name={name} type={type} value={value} defaultValue={defaultValue} onChange={onChange?e=>onChange(e.target.value):undefined} required={required} placeholder={placeholder} min={min} max={max} maxLength={250}/></label>;}
 
-function MapView({ride}: {ride?:Ride}){const has=ride?.sharing===1&&ride.lat!=null&&ride.lng!=null;return <><RideMap lat={ride?.lat} lng={ride?.lng} active={has}/><p className="muted">{has?'The pin is the latest reported position, not a predicted location.':'Explore Karachi. Search suggestions may be approximate; confirm your meeting point.'}</p></>;}
+function MapView({ride}: {ride?:Ride}){return <TripMap ride={ride}/>;}
 
 function MeetingPin({value,label}:{value?:string|null;label:string}){const p=parsePlace(value);return p?<a className="muted" style={{textDecoration:'underline'}} href={'https://www.openstreetmap.org/?mlat='+p.lat+'&mlon='+p.lng+'#map=17/'+p.lat+'/'+p.lng} target="_blank" rel="noreferrer">{label}</a>:null;}
 

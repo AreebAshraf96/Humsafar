@@ -46,6 +46,7 @@ next-env.d.ts
 /.codex/
 /outputs/
 /work/
+/public/maplibre-worker.mjs
 
 # Local database files and credentials
 *.sqlite

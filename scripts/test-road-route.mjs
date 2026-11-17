@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import ts from 'typescript';
+const moduleUrl=source=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
+const locations=await import(moduleUrl(readFileSync('lib/locations.ts','utf8')));
+const routing=await import(moduleUrl(readFileSync('lib/road-route.ts','utf8')));
+const fixture={code:'Ok',routes:[{distance:4200,duration:600,geometry:{coordinates:[[67.03,24.85],[67.04,24.86]]},legs:[{steps:[{name:'Test Road',distance:4200,duration:600,maneuver:{type:'turn',modifier:'left'}}]}]}]};
+assert.equal(routing.readRoadRoute(fixture).steps[0].instruction,'Turn left · Test Road');
+assert.throws(()=>routing.readRoadRoute({code:'NoRoute'}));
+assert.throws(()=>routing.readRoadRoute({...fixture,routes:[{...fixture.routes[0],duration:-1}]}));
+assert.throws(()=>routing.readRoadRoute({...fixture,routes:[{...fixture.routes[0],geometry:{coordinates:[[null,24],[67,24]]}}]}));
+const pin=locations.mapPin(24.85,67.03);assert.equal(pin.label,'','Moved pin cannot retain a previous landmark');assert.equal(pin.source,'pin');assert.throws(()=>locations.mapPin(31,74));
+const results=locations.photonPlaces({features:[{properties:{name:'Clifton Beach',district:'Saddar',city:'Karachi',countrycode:'PK',osm_type:'W',osm_id:1},geometry:{type:'Point',coordinates:[67.03,24.8]}}]});
+assert.equal(results[0].label,'Clifton Beach');assert.equal(results[0].address,'Karachi');assert.equal(results[0].lng,67.03);
+globalThis.__roadTests={...locations,...routing,identity:null};
+let source=readFileSync('app/api/road-route/route.ts','utf8').replace(/^import .*;\r?\n/gm,'');
+source='const {inKarachi,readRoadRoute}=globalThis.__roadTests;const getAuthenticatedUser=async()=>globalThis.__roadTests.identity;\n'+source;
+const {GET}=await import(moduleUrl(source));
+const originalFetch=globalThis.fetch,originalNow=Date.now;let now=100000,calls=0;
+Date.now=()=>now;
+globalThis.fetch=async url=>{calls++;const u=new URL(url);assert.match(u.pathname,/67\.03,24\.85;67\.04,24\.86$/);assert.equal(u.searchParams.get('steps'),'true');return Response.json(fixture)};
+const request=(q='fromLat=24.85&fromLng=67.03&toLat=24.86&toLng=67.04')=>new Request('https://test.local/api/road-route?'+q);
+try{
+ assert.equal((await GET(request())).status,401);globalThis.__roadTests.identity={userId:'test'};
+ assert.equal((await GET(request('fromLat=&fromLng=67'))).status,400);
+ assert.equal((await GET(request())).status,200);assert.equal(calls,1);
+ assert.equal((await GET(request())).status,200);assert.equal(calls,1,'Cache prevents repeated provider calls');
+ assert.equal((await GET(request('fromLat=24.851&fromLng=67.03&toLat=24.86&toLng=67.04'))).status,429);
+ now+=2000;globalThis.fetch=async()=>{throw new Error('Offline')};
+ assert.equal((await GET(request('fromLat=24.851&fromLng=67.03&toLat=24.86&toLng=67.04'))).status,503);
+ console.log('Road route geometry, directions, auth, validation, cache, throttle, offline and stale landmark regression checks passed.');
+}finally{Date.now=originalNow;globalThis.fetch=originalFetch;delete globalThis.__roadTests}

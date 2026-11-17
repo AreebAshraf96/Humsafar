@@ -22,11 +22,17 @@ export function photonPlaces(data:unknown):Place[] {
   const f=feature as {properties?:Record<string,unknown>;geometry?:{type?:string;coordinates?:unknown[]}};
   const p=f.properties,c=f.geometry?.coordinates;if(!p||f.geometry?.type!=='Point'||!Array.isArray(c)||!inKarachi(c[1],c[0])||String(p.countrycode).toUpperCase()!=='PK')continue;
   const name=typeof p.name==='string'?p.name:[p.housenumber,p.street].filter(v=>typeof v==='string').join(' ');if(!name.trim())continue;
-  const label=name.slice(0,160),address=[...new Set([p.housenumber,p.street,p.district,p.city,'Karachi'].filter(v=>typeof v==='string'&&v!==name))].join(', ').slice(0,250);
+  // Photon districts can be broad administrative areas (e.g. Saddar), not the
+  // neighbourhood of the landmark. Never present them as a verified suburb.
+  const label=name.slice(0,160),address=[...new Set([p.housenumber,p.street,p.city,p.state,p.country].filter(v=>typeof v==='string'&&v!==name))].join(', ').slice(0,250);
   const id=`osm:${p.osm_type}:${p.osm_id}`;if(seen.has(id))continue;seen.add(id);
   places.push({id,label,address,lat:c[1] as number,lng:c[0] as number,source:'photon'});
  }
  return places.slice(0,6);
+}
+export function mapPin(lat:number,lng:number):Place {
+ if(!inKarachi(lat,lng))throw new Error('Choose a location inside the Karachi pilot area.');
+ return {id:`pin:${lat.toFixed(6)},${lng.toFixed(6)}`,label:'',address:'User-selected meeting point; address not verified',lat,lng,source:'pin'};
 }
 export function distanceKm(a:Pick<Place,'lat'|'lng'>,b:Pick<Place,'lat'|'lng'>):number {
  const radians=(n:number)=>n*Math.PI/180;const dLat=radians(b.lat-a.lat),dLng=radians(b.lng-a.lng);

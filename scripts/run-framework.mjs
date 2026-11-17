@@ -1,9 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readExecutionProfile } from "./execution-profile.mjs";
+import { copyFileSync, mkdirSync } from "node:fs";
 
 const [command, ...args] = process.argv.slice(2);
 if (!["dev", "build"].includes(command)) throw new Error("Expected dev or build.");
+// Keep the worker matched to the installed renderer and outside Vite's HMR
+// transformations. Vinext serves public assets unchanged in dev and builds.
+mkdirSync(new URL('../public/',import.meta.url),{recursive:true});
+copyFileSync(new URL('../node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs',import.meta.url),new URL('../public/maplibre-worker.mjs',import.meta.url));
 const managedLinux = readExecutionProfile() === "managed-linux";
 
 if (managedLinux && command === "build") {
