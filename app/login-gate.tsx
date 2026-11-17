@@ -4,7 +4,7 @@ import { authRequest, saveSession, validSession } from '@/lib/supabase-auth';
 
 export function loginUrl() {
   // Keep private share tokens out of query strings, server logs and referrers.
-  sessionStorage.setItem('humsafar.returnTo', '/' + location.hash);
+  sessionStorage.setItem('humsafar.returnTo', '/' + location.search + location.hash);
   return '/auth';
 }
 

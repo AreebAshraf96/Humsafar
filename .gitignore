@@ -63,3 +63,8 @@ next-env.d.ts
 
 # Temporary files
 supabase/.temp/
+
+# Downloaded model binaries and local Python/test state
+/verification-model/models/
+**/__pycache__/
+.pytest_cache/

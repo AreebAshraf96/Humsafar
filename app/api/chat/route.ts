@@ -82,20 +82,30 @@ function failure(error: unknown) {
 
 export async function GET(request: Request) {
   try {
-    const rideId = new URL(request.url).searchParams.get('rideId') || '';
+    const params = new URL(request.url).searchParams;
+    const rideId = params.get('rideId') || '';
+    let before: { created_at: string; id: string } | null = null;
+    if (params.has('before')) {
+      try { before = JSON.parse(params.get('before') || ''); } catch { throw new ApiError('Invalid chat cursor.', 400); }
+      if (!before || typeof before.created_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(before.created_at) || !Number.isFinite(Date.parse(before.created_at)) || typeof before.id !== 'string' || !uuidPattern.test(before.id)) throw new ApiError('Invalid chat cursor.', 400);
+    }
     if (!uuidPattern.test(rideId)) throw new ApiError('Choose a valid ride.', 400);
     const { userId, authorization, url, key } = await verifiedUser(request);
     const query = new URLSearchParams({
       select: 'id,ride_id,sender_id,body,created_at',
       ride_id: `eq.${rideId}`,
-      order: 'created_at.asc',
-      limit: '100',
+      order: 'created_at.desc,id.desc',
+      limit: '101',
     });
-    const messages = await rest<Array<{ id: string; sender_id: string; body: string; created_at: string }>>(
+    if (before) query.set('or', `(created_at.lt.${before.created_at},and(created_at.eq.${before.created_at},id.lt.${before.id}))`);
+    const page = await rest<Array<{ id: string; sender_id: string; body: string; created_at: string }>>(
       `${url}/rest/v1/ride_messages?${query}`,
       key,
       authorization,
     );
+    const hasMore = page.length > 100;
+    const messages = page.slice(0, 100).reverse();
+    const oldest = messages[0];
     let readReceipts: Array<{ message_id: string; reader_id: string }> = [];
     if (messages.length) {
       const messageIds = messages.map(message => message.id);
@@ -145,7 +155,7 @@ export async function GET(request: Request) {
       );
       for (const profile of profiles) names.set(profile.id, profile.name);
     }
-    return json({ messages: messages.map(message => ({
+    return json({ nextCursor: hasMore && oldest ? JSON.stringify({ created_at: oldest.created_at, id: oldest.id }) : null, messages: messages.map(message => ({
       ...message,
       sender_name: names.get(message.sender_id) || 'Humsafar user',
       read_by: [...new Set(readReceipts

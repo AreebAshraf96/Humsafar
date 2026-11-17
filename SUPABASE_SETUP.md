@@ -40,3 +40,47 @@ The Edge Function uses Deno (`npm:` imports). Its types are excluded from the we
 Apply `20261015_driver_verification_automation.sql` after the original `20261015_driver_verification.sql` migration. The server integration contract is in `DRIVER_VERIFICATION_MODEL.md`. Humsafar sends the private licence and selfie to the configured self-hosted model endpoint; it never sends them to a model provider on your behalf. Configure `SUPABASE_SERVICE_ROLE_KEY`, `DRIVER_VERIFICATION_MODEL_URL`, and `DRIVER_VERIFICATION_MODEL_KEY` as server-only secrets. Do not add these to browser-prefixed variables or commit their values.
 
 The automated service only compares the selfie with the licence portrait. Every application remains pending for an administrator to inspect the licence, manually check its expiry/details, and make the approval decision. Face similarity is advisory, not proof of identity or licence authenticity. The model endpoint must use HTTPS in production and must not retain uploaded images or face templates.
+
+## November review fixes release
+
+Deploy `202611170001_review_fixes.sql` with this website update. It restricts direct
+profile-name lookup to verified chat participants, adds expiry/revocation review,
+and excludes cancelled/completed rides from the upcoming-offer quota. No live
+migration is applied by the local test commands.
+
+Administrators must enter the licence expiry date from the document when approving.
+Approval remains valid through that date in Pakistan time. Existing approvals with
+no expiry cannot publish new rides until an administrator confirms their expiry
+from retained documents, or the driver submits fresh documents. An administrator
+can revoke an approval with a reason; its status becomes action-required and the
+driver can submit again. Expired approvals can also resubmit. Decisions remain in
+review history. The expiry date is retained after the 90-day image/comparison purge
+so a retained approval cannot become indefinitely valid after its images are deleted.
+
+`npm test` now covers chat pagination with tied timestamps, private profile lookup,
+verification-result races, approval expiry/revocation, cancelled-ride quotas,
+notification destinations and demo seed startup. The demo's synthetic driver is
+approved only in its disposable database. Its smoke test uses placeholder settings
+and makes no live service requests.
+
+### Verification runtime guard
+
+`202611170002_driver_verification_runtime.sql` adds an independent approval trigger
+with a row lock. It prevents an older migration from restoring a status-only ride
+check that ignores licence expiry. Apply this migration after the November review
+fixes. `test-review-fixes.mjs` deliberately reinstalls the old trigger function and
+verifies that the independent guard still blocks expired/revoked drivers.
+
+### Pending-photo replacement and reviewer queue
+
+`202611170003_verification_photo_retake.sql` allows applicants to upload a new
+photo while a request is pending. The submit RPC accepts an optional expected
+submission timestamp; replacement preserves the request ID and unchanged photo.
+Both replacement and administrator review lock/check the current submission,
+preventing stale updates from overwriting a decision or approving unseen photos.
+
+The administrator queue supports a server-side status filter. Its default Pending
+requests view refreshes every 20 seconds while visible; All applications includes
+reviewed requests. Requests navigation is shown after a verified, server-side
+check of the current account's administrator role. Backend authorization remains
+enforced independently of navigation visibility.

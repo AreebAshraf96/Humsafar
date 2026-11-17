@@ -99,7 +99,7 @@ export async function readStoredImage(context: VerificationContext, path: string
 }
 
 export async function serviceRoleRequest<T>(context: VerificationContext, path: string, init: RequestInit = {}): Promise<T> {
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!serviceRoleKey) throw new DriverVerificationError('Server-side verification storage is not configured.', 503);
   let response: Response;
   try {
@@ -107,7 +107,7 @@ export async function serviceRoleRequest<T>(context: VerificationContext, path: 
       ...init,
       headers: {
         apikey: serviceRoleKey,
-        Authorization: `Bearer ${serviceRoleKey}`,
+        ...(serviceRoleKey.startsWith('sb_secret_') ? {} : { Authorization: `Bearer ${serviceRoleKey}` }),
         ...(init.body && typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
         ...init.headers,
       },
@@ -123,4 +123,27 @@ export async function serviceRoleRequest<T>(context: VerificationContext, path: 
 
 export function imageExtension(file: File): 'jpg' | 'png' | 'webp' {
   return file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg';
+}
+
+export async function readVerificationJson(request: Request): Promise<Record<string, unknown>> {
+  const origin = request.headers.get('origin');
+  if ((origin && origin !== new URL(request.url).origin) || request.headers.get('sec-fetch-site') === 'cross-site') throw new DriverVerificationError('Cross-origin requests are not allowed.', 403);
+  if (Number(request.headers.get('content-length')) > 20_000) throw new DriverVerificationError('Request too large.', 413);
+  const reader = request.body?.getReader();
+  if (!reader) throw new DriverVerificationError('Invalid request.', 400);
+  const chunks: Uint8Array[] = []; let length = 0;
+  try {
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      length += value.length;
+      if (length > 20_000) { await reader.cancel(); throw new DriverVerificationError('Request too large.', 413); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(length); let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  const input: unknown = JSON.parse(new TextDecoder().decode(bytes));
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new DriverVerificationError('Invalid request.', 400);
+  return input as Record<string, unknown>;
 }

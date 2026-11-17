@@ -36,10 +36,15 @@ firebase.messaging().onBackgroundMessage(async payload => {
   await self.registration.showNotification(payload.data.title || 'Humsafar', {
     body: payload.data.body || 'Your trip has an update.',
     icon: '/favicon.svg', tag: payload.messageId,
-    data: { url: '/' },
+    data: { url: safeNotificationUrl(payload.data.url) },
   });
 });
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  event.waitUntil(clients.openWindow('/'));
+  event.waitUntil(clients.openWindow(safeNotificationUrl(event.notification.data?.url)));
 });
+
+// Accept only the app's known ride-chat destination; never open push-supplied external URLs.
+function safeNotificationUrl(value) {
+  return typeof value === 'string' && /^\/\?chat=[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) ? value : '/';
+}

@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import {createTestDatabase} from './testing/database.mjs';
+const {db,asUser}=await createTestDatabase();
+const driver='00000000-0000-4000-8000-000000000061',admin='00000000-0000-4000-8000-000000000062',stranger='00000000-0000-4000-8000-000000000063';
+const folder=driver+'/11111111-1111-4111-8111-111111111111';
+const oldLicence=folder+'/licence.jpg',selfie=folder+'/selfie.jpg',newLicence=folder+'/licence.png';
+const submit=(user,licence,expected)=>asUser(user,'select public.humsafar_submit_driver_verification($1,$2,$3,$4) as value',[licence,selfie,'TEST-123',expected||null]);
+const denied=async(fn,code)=>assert.rejects(fn,e=>e.code===code);
+try{
+ for(const id of [driver,admin,stranger])await db.query('insert into auth.users(id,email,email_confirmed_at) values($1,$2,now())',[id,id+'@test.invalid']);
+ await db.query('insert into public.driver_verification_admins(user_id) values($1)',[admin]);
+ await asUser(driver,"insert into storage.objects(bucket_id,name) values('driver-verification',$1),('driver-verification',$2)",[oldLicence,selfie]);
+ const first=(await submit(driver,oldLicence)).rows[0].value;
+ const saved=(await db.query('select submitted_at::text as stamp from public.driver_verifications where id=$1',[first.id])).rows[0].stamp;
+ await denied(()=>submit(driver,oldLicence), '42501');
+ await asUser(driver,"insert into storage.objects(bucket_id,name) values('driver-verification',$1)",[newLicence]);
+ const second=(await submit(driver,newLicence,saved)).rows[0].value;
+ assert.equal(second.id,first.id);assert.equal(second.status,'pending');
+ let row=(await db.query('select * from public.driver_verifications where id=$1',[first.id])).rows[0];
+ assert.equal(row.licence_storage_path,newLicence);assert.equal(row.selfie_storage_path,selfie);
+ assert.equal((await asUser(driver,"delete from storage.objects where bucket_id='driver-verification' and name=$1",[selfie])).rowCount,0,'unchanged selfie protected');
+ assert.equal((await asUser(driver,"delete from storage.objects where bucket_id='driver-verification' and name=$1",[oldLicence])).rowCount,1,'superseded licence removable');
+ await denied(()=>submit(driver,newLicence,saved),'42501');
+ assert.equal((await asUser(admin,"select public.humsafar_admin_driver_verifications(50,0,'pending') as value")).rows[0].value.length,1);
+ await denied(()=>asUser(stranger,"select public.humsafar_admin_driver_verifications(50,0,'pending')"),'42501');
+ await denied(()=>asUser(admin,"select public.humsafar_review_driver_verification($1,'approved','',current_date+365,$2)",[first.id,saved]),'42501');
+ await asUser(admin,"select public.humsafar_review_driver_verification($1,'approved','',current_date+365)",[first.id]);
+ const currentStamp=(await db.query('select submitted_at::text as stamp from public.driver_verifications where id=$1',[first.id])).rows[0].stamp;
+ await denied(()=>submit(driver,newLicence,currentStamp),'42501');
+ row=(await db.query('select status from public.driver_verifications where id=$1',[first.id])).rows[0];assert.equal(row.status,'approved','retake cannot overwrite review');
+ assert.equal((await asUser(admin,"select public.humsafar_admin_driver_verifications(50,0,'pending') as value")).rows[0].value.length,0);
+ assert.equal((await asUser(admin,'select public.humsafar_admin_driver_verifications(50,0,null) as value')).rows[0].value.length,1);
+ console.log('Photo-retake regressions passed: partial replacement, unchanged selfie protected, stale submissions denied, admin decisions preserved and pending queue filtered.');
+}finally{await db.close();}

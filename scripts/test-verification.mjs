@@ -37,7 +37,7 @@ try {
   await asUser(driver, "delete from storage.objects where bucket_id='driver-verification' and name=$1", [`${first}/licence.jpg`]);
   const protectedCurrentFile = await asUser(driver, "delete from storage.objects where bucket_id='driver-verification' and name=$1", [`${second}/licence.png`]);
   check(protectedCurrentFile.rowCount === 0, 'drivers cannot delete documents attached to an active submission');
-  const approved = await asUser(admin, 'select public.humsafar_review_driver_verification($1,$2,$3) as value', [submission.rows[0].value.id, 'approved', '']);
+  const approved = await asUser(admin, 'select public.humsafar_review_driver_verification($1,$2,$3,current_date+365) as value', [submission.rows[0].value.id, 'approved', '']);
   check(approved.rows[0].value.status === 'approved', 'administrator can approve a resubmission');
   check((await asUser(admin, 'select public.humsafar_admin_driver_verifications() as value')).rows[0].value.length === 1, 'admin review queue includes application history');
   await denied(() => asUser(admin, 'select public.humsafar_purge_driver_verification_documents($1)', [submission.rows[0].value.id]), '42501');
@@ -45,5 +45,6 @@ try {
   await asUser(admin, "delete from storage.objects where bucket_id='driver-verification' and name=any($1::text[])", [[`${second}/licence.png`, `${second}/selfie.png`]]);
   await asUser(admin, 'select public.humsafar_purge_driver_verification_documents($1)', [submission.rows[0].value.id]);
   check((await db.query('select licence_storage_path,selfie_storage_path,vehicle_registration_number from public.driver_verifications where id=$1', [submission.rows[0].value.id])).rows[0].licence_storage_path === null, 'retention purge clears private document references and registration');
+  check((await db.query('select licence_expiry_date from public.driver_verifications where id=$1', [submission.rows[0].value.id])).rows[0].licence_expiry_date !== null, 'purging images preserves expiry enforcement');
   console.log(`${checks} driver verification checks passed: secure uploads, private access, protected status, resubmission, admin review history, and retention purge.`);
 } finally { await db.close(); }

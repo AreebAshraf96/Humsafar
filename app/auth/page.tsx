@@ -11,7 +11,7 @@ type Mode = 'login' | 'signup' | 'recover' | 'update';
 function destination() {
   const next = sessionStorage.getItem('humsafar.returnTo');
   sessionStorage.removeItem('humsafar.returnTo');
-  return next === '/' || next?.startsWith('/#trip=') ? next : '/';
+  return next === '/' || next?.startsWith('/#trip=') || /^\/\?chat=[0-9a-f-]{36}$/i.test(next || '') ? next || '/' : '/';
 }
 
 export default function AuthPage() {

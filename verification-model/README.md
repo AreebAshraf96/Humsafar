@@ -45,3 +45,56 @@ Use a private network connection between Vercel and the model server where your 
 The Docker build downloads YuNet and SFace ONNX files from the official OpenCV Zoo. YuNet files in that model directory use MIT; SFace files use Apache 2.0. Preserve the model licenses if redistributing the image. [YuNet model directory](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) · [SFace model directory](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface).
 
 The OpenCV sample cosine threshold is a starting reference and is not validated for Sindh licence portraits and user selfies. Keep `DRIVER_VERIFICATION_FACE_MIN_SCORE` at or above the service threshold plus review margin and have an administrator review every application.
+
+## Run and test without Docker (Windows)
+
+From `C:\Users\hp\humsafar`:
+
+```powershell
+npm run verification:setup
+npm run verification:start
+```
+
+Setup creates the isolated Python environment under ignored `work/`, verifies the
+model downloads by SHA-256, and creates missing local model settings in ignored
+`.env.local`. Existing secrets are preserved. It also downloads two public OpenCV
+sample photos for tests; no real driving licence is used. Keep the service terminal
+open, then run `npm run dev` in another terminal. The app also needs a Supabase
+server key (`SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY`) to save automated
+results. New `sb_secret_` keys are sent only in the server-side `apikey` header.
+
+Run the real OpenCV service tests:
+
+```powershell
+npm run test:verification-model
+```
+
+They exercise valid/invalid images, auth, same/different/multiple/no faces,
+rotations, a small portrait on a clearly labelled test card, concurrency and
+unavailable-model behavior. They are functional checks, not accuracy calibration
+against a representative licence dataset, liveness detection or government checks.
+
+The opt-in `scripts/test-verification-live.mjs --live` uses the configured Supabase
+project and local website to create clearly labelled temporary users/documents.
+It performs browser upload/resubmission/admin approval/revocation and cleans up
+its own fixtures. Its screenshots/report go under ignored
+`work/verification-results/`. It must never use an existing user's documents.
+
+## Advisory document checks and photo sources
+
+The local RapidOCR engine reads English labelled name, licence number and expiry
+fields. The supplied name is compared as text; no raw OCR transcript, printed name,
+licence number, address or birth date is stored in automated results. Only check
+outcomes, reasons and the detected expiry are retained with the existing review
+record and removed with its automated-result retention purge.
+
+Ambiguous numeric dates, unreadable/unsupported layouts, name differences and
+missing fields are flagged for reviewer confirmation. A printed expiry in the
+past receives a correction reason. These checks do not query an official licence
+registry, establish authenticity or automatically approve/reject driver access.
+
+The driver page offers an in-browser camera preview/capture, a native phone-camera
+fallback and an independent file picker without forced capture. Available picker
+providers (Photos, Gallery, Files, Google Photos and others) are controlled by the
+phone and browser. Browser camera access requires permission and a secure origin
+(HTTPS or localhost). A captured photo does not prove liveness.

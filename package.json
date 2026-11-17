@@ -14,7 +14,10 @@
     "db:generate": "drizzle-kit generate",
     "test": "node scripts/test-all.mjs",
     "typecheck": "tsc --noEmit",
-    "demo": "node --env-file=.env.local scripts/demo.mjs"
+    "demo": "node --env-file=.env.local scripts/demo.mjs",
+    "verification:setup": "node scripts/verification-model.mjs setup",
+    "verification:start": "node scripts/verification-model.mjs start",
+    "test:verification-model": "node scripts/verification-model.mjs test"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

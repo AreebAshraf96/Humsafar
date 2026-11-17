@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 import hmac
 import io
 import os
+import warnings
 from pathlib import Path
 
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
+from starlette.concurrency import run_in_threadpool
+from document_checks import document_checks, load_ocr
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = ROOT / "models"
@@ -21,18 +26,28 @@ FACE_MATCH_THRESHOLD = float(os.getenv("MODEL_FACE_MATCH_THRESHOLD", "0.363"))
 FACE_REVIEW_MARGIN = float(os.getenv("MODEL_FACE_REVIEW_MARGIN", "0.02"))
 MODEL_KEY = os.getenv("DRIVER_VERIFICATION_MODEL_KEY", "")
 
-app = FastAPI(title="Humsafar private driver verification", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    load_models()
+    await run_in_threadpool(load_ocr)
+    yield
+
+
+app = FastAPI(title="Humsafar private driver verification", docs_url=None, redoc_url=None, lifespan=lifespan)
+comparison_slot = asyncio.Semaphore(1)
 face_detector = None
 face_recognizer = None
 
 
-@app.on_event("startup")
 def load_models() -> None:
     global face_detector, face_recognizer
+    if not (-1 <= FACE_MATCH_THRESHOLD <= 1) or not (0 <= FACE_REVIEW_MARGIN <= 1) or FACE_MATCH_THRESHOLD + FACE_REVIEW_MARGIN > 1 or FACE_MATCH_THRESHOLD - FACE_REVIEW_MARGIN < -1:
+        raise RuntimeError("Face comparison thresholds are invalid")
     if not MODEL_KEY:
         raise RuntimeError("DRIVER_VERIFICATION_MODEL_KEY must be set")
     if not YUNET_PATH.is_file() or not SFACE_PATH.is_file():
         raise RuntimeError("Face model files are missing; see verification-model/README.md")
+    cv2.setNumThreads(max(1, min(4, os.cpu_count() or 1)))
     face_detector = cv2.FaceDetectorYN.create(str(YUNET_PATH), "", (320, 320), FACE_DETECTION_SCORE, 0.3, 5000)
     face_recognizer = cv2.FaceRecognizerSF.create(str(SFACE_PATH), "")
 
@@ -49,21 +64,32 @@ async def read_image(upload: UploadFile) -> np.ndarray:
     if not raw or len(raw) > MAX_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Each image must be 5 MB or smaller")
     try:
-        with Image.open(io.BytesIO(raw)) as image:
-            image = ImageOps.exif_transpose(image)
-            image = image.convert("RGB")
-            if image.width > 6000 or image.height > 6000:
-                raise HTTPException(status_code=413, detail="Image dimensions are too large")
-            return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+        return await run_in_threadpool(decode_image, raw)
+    finally:
+        await upload.close()
+        raw = b""
+
+
+def decode_image(raw: bytes) -> np.ndarray:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(raw)) as image:
+                # Check dimensions before EXIF handling/conversion decompresses
+                # the image. Small compressed uploads can expand to huge arrays.
+                if image.width > 6000 or image.height > 6000 or image.width * image.height > 24_000_000:
+                    raise HTTPException(status_code=413, detail="Image dimensions are too large")
+                image = ImageOps.exif_transpose(image).convert("RGB")
+                return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+        raise HTTPException(status_code=413, detail="Image dimensions are too large") from None
     except (UnidentifiedImageError, OSError, ValueError):
         raise HTTPException(status_code=400, detail="Could not read the uploaded image") from None
-    finally:
-        raw = b""
 
 
 def detect_face(image: np.ndarray) -> tuple[np.ndarray | None, str | None]:
     assert face_detector is not None and face_recognizer is not None
-    saw_multiple_faces = False
+    best = None
     for rotation in (None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE):
         oriented = image if rotation is None else cv2.rotate(image, rotation)
         height, width = oriented.shape[:2]
@@ -81,8 +107,7 @@ def detect_face(image: np.ndarray) -> tuple[np.ndarray | None, str | None]:
         if faces is None or len(faces) == 0:
             continue
         if len(faces) > 1:
-            saw_multiple_faces = True
-            continue
+            return None, "multiple_faces"
 
         # Detect at a normalized size so very large selfies and tiny printed
         # licence portraits both fall within YuNet's useful face-size range,
@@ -97,15 +122,21 @@ def detect_face(image: np.ndarray) -> tuple[np.ndarray | None, str | None]:
         for point in range(4, 14, 2):
             face[point] *= scale_x
             face[point + 1] *= scale_y
+        confidence = float(face[14])
+        if best is None or confidence > best[0]:
+            best = (confidence, oriented, face)
+
+    # A rotated false-positive must not win merely because that orientation
+    # was tried first. Align the strongest detection after checking all four.
+    if best is not None:
         try:
-            aligned = face_recognizer.alignCrop(oriented, face)
+            aligned = face_recognizer.alignCrop(best[1], best[2])
             feature = face_recognizer.feature(aligned)
             if feature is not None and np.isfinite(feature).all():
                 return feature, None
         except cv2.error:
-            continue
-
-    return None, "multiple_faces" if saw_multiple_faces else "no_face"
+            pass
+    return None, "no_face"
 
 
 def face_check(licence: np.ndarray, selfie: np.ndarray) -> tuple[str, float | None]:
@@ -132,22 +163,25 @@ async def verify(
     selfie: UploadFile = File(...),
     countryCode: str = Form("PK"),
     region: str = Form("Sindh"),
+    declaredName: str = Form("", max_length=100),
     authorization: str | None = Header(default=None),
 ) -> dict[str, object]:
     expected = f"Bearer {MODEL_KEY}"
-    if not MODEL_KEY or not authorization or not hmac.compare_digest(authorization, expected):
+    if not MODEL_KEY or not authorization or not hmac.compare_digest(authorization.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Unauthorized")
     if countryCode != "PK" or region.lower() != "sindh":
         raise HTTPException(status_code=400, detail="Only Pakistan/Sindh licence checks are configured")
 
-    licence_image = await read_image(licence)
-    selfie_image = await read_image(selfie)
-    try:
-        face_status, face_score = face_check(licence_image, selfie_image)
-        return {
-            "faceMatchStatus": face_status,
-            "faceMatchScore": face_score,
-        }
-    finally:
-        # Drop references promptly; do not write images or face embeddings to disk.
-        del licence_image, selfie_image
+    # One inference at a time protects the shared OpenCV instances. Inference
+    # runs off the event loop so health checks remain responsive.
+    async with comparison_slot:
+        licence_image = await read_image(licence)
+        selfie_image = await read_image(selfie)
+        try:
+            face_status, face_score = await run_in_threadpool(face_check, licence_image, selfie_image)
+            checks = await run_in_threadpool(document_checks, licence_image, selfie_image, declaredName)
+            return {"faceMatchStatus": face_status, "faceMatchScore": face_score, "documentChecks": checks}
+        except cv2.error:
+            raise HTTPException(status_code=503, detail="Face comparison is temporarily unavailable") from None
+        finally:
+            del licence_image, selfie_image

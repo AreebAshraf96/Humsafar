@@ -1,14 +1,17 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowLeft, CheckCircle2, FileCheck2, ShieldCheck } from 'lucide-react';
 import { supabaseConfig, validSession } from '@/lib/supabase-auth';
 import Link from 'next/link';
+import PhotoInput from './photo-input';
+import VerificationNav from '../verification-nav';
+import type { AutomatedVerification } from '@/lib/driver-verification-automation';
 
 type Application = {
-  id?: string; status: 'not_submitted' | 'pending' | 'approved' | 'rejected' | 'action_required';
+  automation_available?: boolean; id?: string; status: 'not_submitted' | 'pending' | 'approved' | 'rejected' | 'action_required';
   vehicle_registration_number?: string; review_reason?: string | null; submitted_at?: string; reviewed_at?: string | null;
-  automated_result?: { state?: 'not_run' | 'needs_review' | 'unavailable'; reasonCode?: string; faceMatchStatus?: string | null; faceMatchScore?: number | null };
+  automated_result?: AutomatedVerification;
 };
 
 const statusLabels: Record<Application['status'], string> = {
@@ -18,23 +21,15 @@ const statusLabels: Record<Application['status'], string> = {
 export default function DriverVerificationPage() {
   const [application, setApplication] = useState<Application>({ status: 'not_submitted' });
   const [registration, setRegistration] = useState('');
+  const [declaredName,setDeclaredName]=useState('');
+  const [retaking,setRetaking]=useState(false);
   const [consent, setConsent] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const licenceInput = useRef<HTMLInputElement>(null);
-  const selfieInput = useRef<HTMLInputElement>(null);
-  const licencePreviewUrl = useRef<string | null>(null);
-  const selfiePreviewUrl = useRef<string | null>(null);
-  const [licencePreview, setLicencePreview] = useState<string | null>(null);
-  const [selfiePreview, setSelfiePreview] = useState<string | null>(null);
-
-  useEffect(() => () => {
-    if (licencePreviewUrl.current) URL.revokeObjectURL(licencePreviewUrl.current);
-    if (selfiePreviewUrl.current) URL.revokeObjectURL(selfiePreviewUrl.current);
-  }, []);
-
+  const [licenceFile,setLicenceFile]=useState<File|null>(null);
+  const [selfieFile,setSelfieFile]=useState<File|null>(null);
   useEffect(() => {
     const timer = setTimeout(() => {
       void (async () => {
@@ -58,11 +53,7 @@ export default function DriverVerificationPage() {
     event.preventDefault(); setError(''); setMessage('');
     const form = event.currentTarget;
     const formData = new FormData(form);
-    const licenceFile = formData.get('licence');
-    const selfieFile = formData.get('selfie');
-    if (!(licenceFile instanceof File) || !licenceFile.size || !(selfieFile instanceof File) || !selfieFile.size) {
-      setError('Select a licence image and a selfie before submitting.'); return;
-    }
+    if(retaking ? !licenceFile&&!selfieFile : !licenceFile||!selfieFile){setError(retaking?'Take or choose at least one replacement photo.':'Select a licence image and a selfie before submitting.');return;}
     setBusy(true);
     const uploadedPaths: string[] = [];
     try {
@@ -102,21 +93,23 @@ export default function DriverVerificationPage() {
           throw new Error(reason || `Could not upload the ${field === 'licence' ? 'licence' : 'selfie'} image.`);
         }
         uploadedPaths.push(path);
+        return path;
       };
 
       // Upload photos directly to Storage so large file bodies bypass the app
       // runtime's smaller request-body limit. The bucket and RLS policies still
       // enforce the per-file size, MIME type, and ownership.
-      await upload('licence', licenceFile);
-      await upload('selfie', selfieFile);
+      const paths:{licencePath?:string;selfiePath?:string}={};
+      if(licenceFile)paths.licencePath=await upload('licence',licenceFile);
+      if(selfieFile)paths.selfiePath=await upload('selfie',selfieFile);
       const data = await send(JSON.stringify({
-        action: 'submit', licencePath: uploadedPaths[0], selfiePath: uploadedPaths[1], registration,
+        action: 'submit', ...paths, ...(retaking?{replaceSubmittedAt:application.submitted_at}:{}), registration, declaredName: String(formData.get('declaredName')||''),
       }));
-      const application = data as unknown as Application;
-      setApplication(application);
+      const submittedApplication = data as unknown as Application;
+      setApplication(submittedApplication);
+      setRetaking(false);
       setMessage('Your documents were submitted. An administrator will check the licence and face comparison before deciding.');
-      if (licencePreviewUrl.current) URL.revokeObjectURL(licencePreviewUrl.current); licencePreviewUrl.current = null; setLicencePreview(null);
-      if (selfiePreviewUrl.current) URL.revokeObjectURL(selfiePreviewUrl.current); selfiePreviewUrl.current = null; setSelfiePreview(null);
+      setLicenceFile(null);setSelfieFile(null);
       form.reset(); setConsent(false);
     } catch (error) {
       setError((error as Error).message);
@@ -136,12 +129,13 @@ export default function DriverVerificationPage() {
   async function retryAutomation() {
     setBusy(true); setError(''); setMessage('');
     try {
+      if(declaredName.trim().length<2)throw new Error('Enter your full name as printed on the licence before running checks.');
       const session = await validSession();
       if (!session) { location.replace('/auth'); return; }
       const response = await fetch('/api/driver-verification', {
         method: 'POST',
         headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'retry_automation' }),
+        body: JSON.stringify({ action: 'retry_automation',declaredName:declaredName.trim() }),
       });
       const text = await response.text();
       let data: Record<string, unknown> = {};
@@ -150,17 +144,20 @@ export default function DriverVerificationPage() {
       if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Could not retry automated checks.');
       const updated = data as unknown as Application;
       setApplication(current => ({ ...current, ...updated }));
-      setMessage('The face comparison ran again. Your application remains pending for administrator review.');
+      setMessage(updated.automated_result?.state === 'unavailable' ? 'Face comparison is temporarily unavailable. Your application remains queued for manual review.' : updated.status === 'pending' ? 'The face comparison ran again. Your application remains pending for administrator review.' : 'Your application status has been updated.');
     } catch (error) { setError((error as Error).message); }
     finally { setBusy(false); }
   }
 
-  const canSubmit = ['not_submitted','rejected','action_required'].includes(application.status);
+  const checks=application.automated_result?.documentChecks;
+  const needsClearerPhoto=checks?.state==='review_required'&&(['unreadable','ambiguous'].includes(checks.expiryStatus)||checks.nameStatus==='unreadable'||!checks.licenceNumberPresent||checks.reasons.some(reason=>/blurry|too small|too dark|overexposed/i.test(reason)));
+  const canSubmit = ['not_submitted','rejected','action_required'].includes(application.status)||(application.status==='pending'&&retaking);
   return <main className="verification-shell">
     <Link className="verification-back" href="/"><ArrowLeft size={17}/> Back to Humsafar</Link>
     <section className="verification-card">
+      <VerificationNav/>
       <div className="verification-title"><span><ShieldCheck size={23}/></span><div><p className="eyebrow">DRIVER SAFETY</p><h1>Driver verification</h1></div></div>
-      <p className="verification-intro">Submit a licence image, a selfie, and your vehicle registration number. Humsafar’s self-hosted service compares the selfie with the licence portrait. An administrator checks the licence expiry and details before deciding your application.</p>
+      <p className="verification-intro">Take photos or choose existing images. Automatic checks read licence details, compare the supplied name, check expiry and photo quality, and provide reasons for anything that needs attention. An administrator confirms the documents before approving driving access.</p>
       <div className={`verification-status status-${application.status}`} role="status"><FileCheck2 size={20}/><div><strong>{statusLabels[application.status]}</strong>{application.submitted_at && <small>Submitted {new Date(application.submitted_at).toLocaleString('en-PK')}</small>}</div></div>
       {application.automated_result && application.automated_result.state !== 'not_run' && <div className="banner" role="status">
         <strong>{application.automated_result.state === 'unavailable' ? 'Automated face check unavailable' : 'Face comparison result'}</strong>
@@ -168,20 +165,25 @@ export default function DriverVerificationPage() {
         {application.automated_result.reasonCode && <p>Reason: {application.automated_result.reasonCode.replaceAll('_', ' ')}.</p>}
         <p>An administrator must review the licence expiry and details before approval.</p>
       </div>}
+      {application.automated_result?.documentChecks&&<div className="banner"><strong>Automatic document checks</strong><ul>{application.automated_result.documentChecks.reasons.map((reason,index)=><li key={index}>{reason}</li>)}</ul><p>Expiry read from document: {application.automated_result.documentChecks.expiryDate||'Could not read confidently'}</p><p>Final driver approval requires administrator review.</p></div>}
+      {application.status==='pending'&&needsClearerPhoto&&!retaking&&<div className="banner error" role="alert"><strong>Please take another clear photo</strong><p>Some licence details could not be read confidently. Show the whole licence, including the expiry date, in good light without glare. Replace only the unclear photo; your other photo will be kept.</p><button type="button" className="primary" onClick={()=>{setRetaking(true);setError('');setMessage('')}}>Retake / replace photos</button><p>Your request remains pending. You can also wait for administrator review.</p></div>}
       {application.review_reason && <div className="banner error" role="alert"><strong>Reviewer feedback</strong><p>{application.review_reason}</p>{application.reviewed_at && <small>Reviewed {new Date(application.reviewed_at).toLocaleString('en-PK')}</small>}</div>}
       {application.status === 'approved' && <div className="banner verification-approved"><CheckCircle2 size={18}/> Your driver profile is approved. You can publish rides now.</div>}
       {loading ? <p className="muted">Loading your status…</p> : canSubmit ? <form className="verification-form" onSubmit={submit}>
+        {retaking&&<div className="banner"><strong>Replace unclear photos</strong><p>Take or choose a new licence photo, selfie, or both. Any photo you leave unchanged will be kept.</p><button type="button" className="subtle" onClick={()=>{setRetaking(false);setLicenceFile(null);setSelfieFile(null);setError('')}}>Cancel replacement</button></div>}
         <div className="formgrid">
-          <div className="field"><label htmlFor="licence-image">Driving licence image</label><input ref={licenceInput} id="licence-image" name="licence" type="file" accept="image/jpeg,image/png,image/webp" required capture="environment" onChange={e=>{const file=e.currentTarget.files?.[0]||null;if(file&&(file.size>5*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type))){e.currentTarget.value='';setError('Choose a JPG, PNG, or WebP image up to 5 MB.');return}setError('');if(licencePreviewUrl.current)URL.revokeObjectURL(licencePreviewUrl.current);licencePreviewUrl.current=file?URL.createObjectURL(file):null;setLicencePreview(licencePreviewUrl.current)}}/><small>Clear, readable JPG, PNG, or WebP image. Maximum 5 MB.</small>{licencePreview&&<><img className="verification-image-preview" src={licencePreview} alt="Driving licence preview"/><button type="button" className="subtle" onClick={()=>{if(licenceInput.current)licenceInput.current.value='';if(licencePreviewUrl.current)URL.revokeObjectURL(licencePreviewUrl.current);licencePreviewUrl.current=null;setLicencePreview(null)}}>Remove / choose another</button></>}</div>
-          <div className="field"><label htmlFor="selfie-image">Selfie</label><input ref={selfieInput} id="selfie-image" name="selfie" type="file" accept="image/jpeg,image/png,image/webp" required capture="user" onChange={e=>{const file=e.currentTarget.files?.[0]||null;if(file&&(file.size>5*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type))){e.currentTarget.value='';setError('Choose a JPG, PNG, or WebP image up to 5 MB.');return}setError('');if(selfiePreviewUrl.current)URL.revokeObjectURL(selfiePreviewUrl.current);selfiePreviewUrl.current=file?URL.createObjectURL(file):null;setSelfiePreview(selfiePreviewUrl.current)}}/><small>Face visible, good lighting. Maximum 5 MB.</small>{selfiePreview&&<><img className="verification-image-preview" src={selfiePreview} alt="Selfie preview"/><button type="button" className="subtle" onClick={()=>{if(selfieInput.current)selfieInput.current.value='';if(selfiePreviewUrl.current)URL.revokeObjectURL(selfiePreviewUrl.current);selfiePreviewUrl.current=null;setSelfiePreview(null)}}>Remove / retake</button></>}</div>
+          <PhotoInput id="licence-image" label="Driving licence image" facing="environment" file={licenceFile} onChange={setLicenceFile}/>
+          <PhotoInput id="selfie-image" label="Selfie" facing="user" file={selfieFile} onChange={setSelfieFile}/>
+          <label className="field span2">Full name as printed on licence<input name="declaredName" value={declaredName} onChange={event=>setDeclaredName(event.target.value)} autoComplete="name" required minLength={2} maxLength={100}/><small>Used to compare the printed text with the name you provide. This does not verify identity.</small></label>
           <label className="field span2">Vehicle registration number<input name="vehicleRegistration" required minLength={3} maxLength={20} pattern="[A-Za-z0-9 -]{3,20}" value={registration} onChange={e=>setRegistration(e.target.value.toUpperCase())} placeholder="e.g. ABC-123"/><small>Use the registration number of the vehicle you intend to drive.</small></label>
         </div>
-        <label className="verification-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/> I consent to Humsafar securely storing my documents and processing them with its self-hosted service to compare my selfie with the licence photo. An administrator will check the licence expiry and details before deciding. This is not official government authentication.</label>
+        <label className="verification-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/> I consent to Humsafar securely storing my documents and processing them on its self-hosted service to read licence details, check expiry and image quality, and compare the submitted photos. An administrator will check the licence expiry and details before deciding. This is not official government authentication.</label>
         {error && <p className="banner error" role="alert">{error}</p>}{message && <p className="banner" role="status">{message}</p>}
-        <button className="primary" disabled={busy||!consent}>{busy?'Uploading securely…':application.status==='not_submitted'?'Submit for review':'Resubmit for review'}</button>
+        <button className="primary" disabled={busy||!consent}>{busy?'Uploading securely…':retaking?'Submit replacement photos':application.status==='not_submitted'?'Submit for review':'Resubmit for review'}</button>
       </form> : application.status === 'pending' ? <>
-        <p className="muted">Your application is in the review queue. You cannot submit another application while review is pending.</p>
-        {application.automated_result?.state === 'unavailable' && <button type="button" className="primary" disabled={busy} onClick={retryAutomation}>{busy ? 'Retrying face comparison…' : 'Retry face comparison'}</button>}
+        <p className="muted">Your application is in the review queue. You can replace unclear photos while it is pending.</p>
+        {!needsClearerPhoto&&<button type="button" className="outline" onClick={()=>{setRetaking(true);setError('');setMessage('')}}>Replace photos</button>}
+        {application.automation_available && (application.automated_result?.state === 'unavailable'||!application.automated_result?.documentChecks||application.automated_result?.documentChecks?.state === 'unavailable') && <><label className="field">Full name as printed on licence<input value={declaredName} onChange={event=>setDeclaredName(event.target.value)} autoComplete="name" maxLength={100}/></label><button type="button" className="primary" disabled={busy} onClick={retryAutomation}>{busy ? 'Running automatic checks…' : 'Run automatic checks'}</button></>}
         {error && <p className="banner error" role="alert">{error}</p>}{message && <p className="banner" role="status">{message}</p>}
       </> : null}
       <p className="verification-retention">Privacy: documents stay in private storage, are available only to you and authorized reviewers, and are eligible for deletion 90 days after approval or rejection. You can contact Humsafar to request earlier deletion.</p>

@@ -12,15 +12,10 @@ WORKDIR /app
 COPY requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt
 
-RUN mkdir -p models \
-    && curl -fsSL https://github.com/opencv/opencv_zoo/raw/refs/heads/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx \
-       -o models/face_detection_yunet_2023mar.onnx \
-    && curl -fsSL https://github.com/opencv/opencv_zoo/raw/refs/heads/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx \
-       -o models/face_recognition_sface_2021dec.onnx \
-    && test "$(wc -c < models/face_detection_yunet_2023mar.onnx)" -gt 10000 \
-    && test "$(wc -c < models/face_recognition_sface_2021dec.onnx)" -gt 1000000
+COPY download_models.py ./download_models.py
+RUN python download_models.py
 
-COPY app.py ./app.py
+COPY app.py document_checks.py ./
 RUN useradd --create-home --uid 10001 service && chown -R service:service /app
 USER service
 

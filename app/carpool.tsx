@@ -6,7 +6,7 @@ import { saveNotificationSubscription } from "@/lib/notification-subscriptions";
 
 import {useCallback,useEffect,useRef,useState, type FormEvent} from 'react';
 
-import {CarFront,ArrowRight,MapPin,Search,Plus,ShieldCheck,Users,ArrowLeftRight,Navigation,Share2,RefreshCw,UserRound,CalendarDays,Check,Clock,MessageCircle,Send} from 'lucide-react';
+import {CarFront,ArrowRight,MapPin,Search,Plus,ShieldCheck,Users,ArrowLeftRight,Navigation,Share2,RefreshCw,UserRound,CalendarDays,Check} from 'lucide-react';
 
 import {Dialog,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog';
 
@@ -19,6 +19,8 @@ import {Toaster,toast} from 'sonner';
 import {pakistanToday} from '@/lib/domain';
 
 import RideMap from './ride-map';
+import RideChat from './ride-chat';
+import {AdminRequestsLink} from './verification-nav';
 import Link from 'next/link';
 import {useRouter} from 'next/navigation';
 
@@ -38,15 +40,7 @@ type Detail={ride:Ride;own:boolean;booking:Booking|null;passengers:Person[];requ
 
 type Me={user:{id:string;name:string}|null;profile:{name:string;gender:string;phone:string}|null};
 
-type ChatMessage = {
-  id: string;
-  sender_id: string;
-  sender_name: string;
-  body: string;
-  created_at: string;
-  read_by: string[];
-};
-
+type ApiResult = Me & Detail & { rides: Ride[]; token: string; count: number; error?: string };
 
 const labels:Record<string,string>={scheduled:'Scheduled',enroute:'Driver on the way',arrived:'Driver has arrived',started:'Trip in progress',ended:'Completed',cancelled:'Cancelled',pending:'Awaiting approval',approved:'Seat approved',declined:'Request declined'};
 
@@ -54,7 +48,7 @@ const genders=['Not specified','Woman','Man','Non-binary'];
 
 const weekdays=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
-async function api(action:string,payload?:Record<string,unknown>){const session=typeof window!=='undefined'?await validSession():null;const headers:Record<string,string>={...(payload?{'Content-Type':'application/json'}:{}),...(session?{Authorization:`Bearer ${session.access_token}`}:{})};const r=await fetch(payload?'/api/carpool':'/api/carpool?'+action,payload?{method:'POST',headers,body:JSON.stringify({action,...payload})}:{headers,cache:'no-store'});const data:any=await r.json();if(r.status===401){sessionStorage.setItem('humsafar.returnTo','/'+location.hash);location.replace('/auth');throw new Error('Please sign in again.')}if(!r.ok)throw new Error(data.error||'Something went wrong. Please try again.');return data;}
+async function api(action:string,payload?:Record<string,unknown>){const session=typeof window!=='undefined'?await validSession():null;const headers:Record<string,string>={...(payload?{'Content-Type':'application/json'}:{}),...(session?{Authorization:`Bearer ${session.access_token}`}:{})};const r=await fetch(payload?'/api/carpool':'/api/carpool?'+action,payload?{method:'POST',headers,body:JSON.stringify({action,...payload})}:{headers,cache:'no-store'});const data=await r.json() as ApiResult;if(r.status===401){sessionStorage.setItem('humsafar.returnTo','/'+location.search+location.hash);location.replace('/auth');throw new Error('Please sign in again.')}if(!r.ok)throw new Error(data.error||'Something went wrong. Please try again.');return data;}
 
 function money(fare:number|null){return fare===null?'Negotiable':`Rs ${fare.toLocaleString('en-PK')}`;}
 
@@ -70,11 +64,11 @@ function MapView({ride}: {ride?:Ride}){const has=ride?.sharing===1&&ride.lat!=nu
 
 function MeetingPin({value,label}:{value?:string|null;label:string}){const p=parsePlace(value);return p?<a className="muted" style={{textDecoration:'underline'}} href={'https://www.openstreetmap.org/?mlat='+p.lat+'&mlon='+p.lng+'#map=17/'+p.lat+'/'+p.lng} target="_blank" rel="noreferrer">{label}</a>:null;}
 
-function LocationStatus({ride}: {ride:Ride}){const [now,setNow]=useState(Date.now());useEffect(()=>{const t=setInterval(()=>setNow(Date.now()),5000);return()=>clearInterval(t)},[]);const age=ride.updated?Math.max(0,Math.floor((now-ride.updated)/1000)):null;return <div className={'banner '+(age!==null&&age>45?'error':'')}><strong>{!ride.sharing?'Location sharing is off':age===null?'Waiting for a location':age>45?'Location updates interrupted':'Recent location available'}</strong><div>{age!==null&&ride.sharing?`Last received ${age<60?age+' seconds':Math.floor(age/60)+' minutes'} ago · Accuracy about ${Math.round(ride.accuracy||0)} m.`:'The driver must enable location sharing on their device.'}</div><div>Keep the website open. Locking the phone, switching apps or losing signal may pause updates.</div></div>;}
+function LocationStatus({ride}: {ride:Ride}){const [now,setNow]=useState(0);useEffect(()=>{const start=setTimeout(()=>setNow(Date.now()),0);const t=setInterval(()=>setNow(Date.now()),5000);return()=>{clearTimeout(start);clearInterval(t)}},[]);const age=ride.updated?Math.max(0,Math.floor((now-ride.updated)/1000)):null;return <div className={'banner '+(age!==null&&age>45?'error':'')}><strong>{!ride.sharing?'Location sharing is off':age===null?'Waiting for a location':age>45?'Location updates interrupted':'Recent location available'}</strong><div>{age!==null&&ride.sharing?`Last received ${age<60?age+' seconds':Math.floor(age/60)+' minutes'} ago · Accuracy about ${Math.round(ride.accuracy||0)} m.`:'The driver must enable location sharing on their device.'}</div><div>Keep the website open. Locking the phone, switching apps or losing signal may pause updates.</div></div>;}
 
 function RideCard({ride,onOpen,own}: {ride:Ride;onOpen:()=>void;own?:boolean}){return <article className="ridecard"><div className="ridebody"><div><div className="route"><div className="route-line"/><div className="routepoints"><div><strong>{ride.origin}</strong><small>{ride.time} PKT · {dateLabel(ride.date)}</small></div><div><strong>{ride.destination}</strong><small>{ride.stops?`Via ${ride.stops.split('|').join(' · ')}`:ride.dropoff}</small></div></div></div><div className="occupants"><Users size={16}/>{ride.occupied} confirmed · {Math.max(0,ride.seats-ride.occupied)} seats available</div></div><div className="fare"><strong>{money(ride.fare)}</strong><small>per seat · agree directly</small><div style={{marginTop:18}}><span className="badge">{labels[ride.booking?.status||ride.status]}</span></div></div></div><div className="ridefooter"><span className="avatar">{initials(ride.driverName)}</span><div className="drivertext"><strong>{ride.driverName}{own?' · You':''}</strong><small>{ride.car} · {ride.driverGender}</small></div><button className="outline" onClick={onOpen}>{own?'Manage ride':'View ride'}<ArrowRight size={16}/></button></div></article>;}
 
-function SharedTracker({token}:{token:string}){const [ride,setRide]=useState<Ride|null>(null),[error,setError]=useState('');useEffect(()=>{let active=true;async function refresh(){try{const d=await api('track',{token});if(active){setRide(d.ride);setError('')}}catch(e){if(active){setRide(null);setError((e as Error).message)}}}refresh();const t=setInterval(refresh,10000);return()=>{active=false;clearInterval(t)}},[token]);return <main className="tracking"><a className="brand" href="/"><span className="brand-icon"><CarFront/></span>humsafar</a><div className="formcard"><p className="eyebrow">SHARED TRIP</p><h1>Follow their journey.</h1>{error?<div className="banner error" role="alert">{error}</div>:!ride?<p className="loading">Loading trip…</p>:<div className="detailstack"><h2>{ride.origin} → {ride.destination}</h2><p>{ride.driverName} · {ride.car} · {ride.plate}</p><LocationStatus ride={ride}/><MapView ride={ride}/><p className="muted">This private link expires when the trip ends, after 12 hours, or when its owner stops sharing. Anyone with the link can view these trip details. It is not an emergency service.</p></div>}</div></main>;}
+function SharedTracker({token}:{token:string}){const [ride,setRide]=useState<Ride|null>(null),[error,setError]=useState('');useEffect(()=>{let active=true;async function refresh(){try{const d=await api('track',{token});if(active){setRide(d.ride);setError('')}}catch(e){if(active){setRide(null);setError((e as Error).message)}}}refresh();const t=setInterval(refresh,10000);return()=>{active=false;clearInterval(t)}},[token]);return <main className="tracking"><Link className="brand" href="/"><span className="brand-icon"><CarFront/></span>humsafar</Link><div className="formcard"><p className="eyebrow">SHARED TRIP</p><h1>Follow their journey.</h1>{error?<div className="banner error" role="alert">{error}</div>:!ride?<p className="loading">Loading trip…</p>:<div className="detailstack"><h2>{ride.origin} → {ride.destination}</h2><p>{ride.driverName} · {ride.car} · {ride.plate}</p><LocationStatus ride={ride}/><MapView ride={ride}/><p className="muted">This private link expires when the trip ends, after 12 hours, or when its owner stops sharing. Anyone with the link can view these trip details. It is not an emergency service.</p></div>}</div></main>;}
 
 export default function Carpool(){
 
@@ -82,38 +76,9 @@ export default function Carpool(){
 
  const [view,setView]=useState('find'),[from,setFrom]=useState(''),[to,setTo]=useState(''),[date,setDate]=useState(pakistanToday()),[rides,setRides]=useState<Ride[]>([]),[trips,setTrips]=useState<Ride[]>([]),[me,setMe]=useState<Me>({user:null,profile:null}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[busy,setBusy]=useState(false),[selected,setSelected]=useState<string|null>(null),[detail,setDetail]=useState<Detail|null>(null),[message,setMessage]=useState(''),[reply,setReply]=useState<Record<string,string>>({}),[gender,setGender]=useState('Not specified'),[days,setDays]=useState<number[]>([]),[shareLink,setShareLink]=useState(''),[tracking,setTracking]=useState(false),[token,setToken]=useState('');
 
- const [chatMessages,setChatMessages]=useState<ChatMessage[]>([]),[chatError,setChatError]=useState(''),[chatBusy,setChatBusy]=useState(false);
- const chatEndRef=useRef<HTMLDivElement|null>(null);
-
  const [fromPoint,setFromPoint]=useState<Place|null>(null),[toPoint,setToPoint]=useState<Place|null>(null),[offerFrom,setOfferFrom]=useState(''),[offerTo,setOfferTo]=useState(''),[offerFromPoint,setOfferFromPoint]=useState<Place|null>(null),[offerToPoint,setOfferToPoint]=useState<Place|null>(null);
 
  const watch=useRef<number|null>(null),lastSent=useRef(0),trackingRide=useRef<string|null>(null),versions=useRef<Record<string,string>>({});
-
- async function loadChat(rideId:string){
-  const session=await validSession();
-  if(!session)throw new Error('Please sign in again.');
-  const response=await fetch(`/api/chat?rideId=${encodeURIComponent(rideId)}`,{headers:{Authorization:`Bearer ${session.access_token}`},cache:'no-store'});
-  const data=await response.json() as {error?:string;messages?:ChatMessage[]};
-  if(!response.ok)throw new Error(data.error||'Could not load chat.');
-  setChatMessages(data.messages||[]);
- }
-
- async function sendChatMessage(e:FormEvent<HTMLFormElement>){
-  e.preventDefault();
-  const form=e.currentTarget;
-  const body=String(new FormData(form).get('body')||'').trim();
-  if(!detail)return;
-  if(!body){setChatError('Type a message before sending.');return;}
-  const session=await validSession();
-  if(!session){setChatError('Please sign in again.');return;}
-  setChatBusy(true);setChatError('');
-  try{
-   const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${session.access_token}`},body:JSON.stringify({rideId:detail.ride.id,body})});
-   const data=await response.json() as {error?:string;message?:unknown};
-   if(!response.ok)throw new Error(data.error||'Could not send message.');
-   form.reset();await loadChat(detail.ride.id);
-  }catch(error){setChatError((error as Error).message)}finally{setChatBusy(false)}
- }
 
  const refreshMe=useCallback(async()=>{const d=await api('action=me');setMe(d);setGender(d.profile?.gender||'Not specified');return d as Me},[]);
 
@@ -123,49 +88,33 @@ export default function Carpool(){
 
  const loadDetail=useCallback(async(id:string)=>{const d=await api('action=detail&id='+encodeURIComponent(id));setDetail(d);return d as Detail},[]);
 
- useEffect(() => {
-  const canChat =
-    !!detail && (detail.own || detail.booking?.status === 'approved');
+ useEffect(()=>{
+  const timer=setTimeout(()=>{
+   const params=new URLSearchParams(location.hash.slice(1));const trip=params.get('trip');
+   if(trip){setToken(trip);return;}
+   const chatRide=new URLSearchParams(location.search).get('chat');if(chatRide)setSelected(chatRide);
+   void refreshMe().catch(e=>setError(e.message));
+   void api('action=rides&'+new URLSearchParams({date:pakistanToday()})).then(data=>setRides(data.rides)).catch(e=>setError(e.message)).finally(()=>setLoading(false));
+  },0);
+  return()=>clearTimeout(timer);
+ },[refreshMe]);
 
-  if (!selected || !canChat) {
-    setChatMessages([]);
-    return;
-  }
+ const userId=me.user?.id;
+ useEffect(()=>{if(view!=='trips'||!userId)return;const start=setTimeout(()=>void loadTrips(),0);const interval=setInterval(()=>void loadTrips(),12000);return()=>{clearTimeout(start);clearInterval(interval)}},[view,userId,loadTrips]);
 
-  let active = true;
-
-  const refresh = async () => {
-    try {
-      await loadChat(selected);
-    } catch (error) {
-      if (active) setChatError((error as Error).message);
-    }
-  };
-
-  refresh();
-  const timer = setInterval(refresh, 5000);
-
-  return () => {
-    active = false;
-    clearInterval(timer);
-  };
- }, [selected, detail?.own, detail?.booking?.status]);
-
- useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:'smooth',block:'nearest'})},[chatMessages]);
-
-
-
- useEffect(()=>{const params=new URLSearchParams(location.hash.slice(1));const t=params.get('trip');if(t){setToken(t);return}const chatRide=new URLSearchParams(location.search).get('chat');if(chatRide)setSelected(chatRide);refreshMe().catch(e=>setError(e.message));search();},[]);
-
- useEffect(()=>{if(view==='trips'&&me.user){loadTrips();const t=setInterval(loadTrips,12000);return()=>clearInterval(t)}},[view,me.user?.id,loadTrips]);
-
- useEffect(()=>{if(!selected){setDetail(null);setShareLink('');return}let active=true;async function refresh(){try{const d=await api('action=detail&id='+selected);if(active)setDetail(d)}catch(e){if(active)setError((e as Error).message)}}refresh();const t=setInterval(refresh,10000);return()=>{active=false;clearInterval(t)}},[selected]);
+ useEffect(()=>{
+  if(!selected)return;
+  let active=true;
+  async function refresh(){try{const data=await api('action=detail&id='+selected);if(active)setDetail(data)}catch(e){if(active)setError((e as Error).message)}}
+  void refresh();const interval=setInterval(()=>void refresh(),10000);
+  return()=>{active=false;clearInterval(interval)};
+ },[selected]);
 
  useEffect(()=>()=>{if(watch.current!==null)navigator.geolocation.clearWatch(watch.current)},[]);
 
- useEffect(()=>{if(detail&&trackingRide.current===detail.ride.id&&['ended','cancelled'].includes(detail.ride.status)){if(watch.current!==null)navigator.geolocation.clearWatch(watch.current);watch.current=null;trackingRide.current=null;setTracking(false)}},[detail]);
+ useEffect(()=>{if(detail&&trackingRide.current===detail.ride.id&&['ended','cancelled'].includes(detail.ride.status)){if(watch.current!==null)navigator.geolocation.clearWatch(watch.current);watch.current=null;trackingRide.current=null;const timer=setTimeout(()=>setTracking(false),0);return()=>clearTimeout(timer)}},[detail]);
 
- useEffect(()=>{const context=(document as any).modelContext;if(!context?.registerTool)return;const lifecycle=new AbortController();Promise.resolve(context.registerTool({name:'search_rides',description:'Search saved carpool rides by departure, destination and date; updates the visible search results.',inputSchema:{type:'object',properties:{from:{type:'string'},to:{type:'string'},date:{type:'string',pattern:'^\\\d{4}-\\\d{2}-\\\d{2}$'}},required:['from','to','date'],additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute:async(input:any)=>{if(typeof input.from!=='string'||typeof input.to!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(input.date))throw new Error('Valid route and date required');const d=await api('action=rides&'+new URLSearchParams(input));setFrom(input.from);setTo(input.to);setFromPoint(null);setToPoint(null);setDate(input.date);setRides(d.rides);setView('find');return {count:d.rides.length,rides:d.rides.map((r:Ride)=>({id:r.id,from:r.origin,to:r.destination,time:r.time,fare:r.fare}))}}},{signal:lifecycle.signal})).catch(()=>{});return()=>lifecycle.abort()},[]);
+ useEffect(()=>{const context=(document as Document & {modelContext?: {registerTool: (tool: unknown, options: {signal: AbortSignal}) => Promise<unknown>}}).modelContext;if(!context?.registerTool)return;const lifecycle=new AbortController();Promise.resolve(context.registerTool({name:'search_rides',description:'Search saved carpool rides by departure, destination and date; updates the visible search results.',inputSchema:{type:'object',properties:{from:{type:'string'},to:{type:'string'},date:{type:'string',pattern:'^\\\d{4}-\\\d{2}-\\\d{2}$'}},required:['from','to','date'],additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute:async(input:Record<string,string>)=>{if(typeof input.from!=='string'||typeof input.to!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(input.date))throw new Error('Valid route and date required');const d=await api('action=rides&'+new URLSearchParams(input));setFrom(input.from);setTo(input.to);setFromPoint(null);setToPoint(null);setDate(input.date);setRides(d.rides);setView('find');return {count:d.rides.length,rides:d.rides.map((r:Ride)=>({id:r.id,from:r.origin,to:r.destination,time:r.time,fare:r.fare}))}}},{signal:lifecycle.signal})).catch(()=>{});return()=>lifecycle.abort()},[]);
 
  async function mutate(action:string,data:Record<string,unknown>,success:string){setBusy(true);setError('');try{const d=await api(action,data);toast.success(success);if(selected)await loadDetail(selected);if(view==='trips')await loadTrips();return d}catch(e){setError((e as Error).message);toast.error((e as Error).message);return null}finally{setBusy(false)}}
 
@@ -184,7 +133,7 @@ export default function Carpool(){
   }catch(error){toast.error((error as Error).message);setView('find')}
  }
 
- async function openRide(id:string){if(!me.user){setView('profile');return}setMessage('');setSelected(id);}
+ async function openRide(id:string){if(!me.user){setView('profile');return}setMessage('');setDetail(null);setShareLink('');setSelected(id);}
 
  async function saveProfile(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);const d=await mutate('profile',{name:f.get('name'),phone:f.get('phone'),gender},'Profile saved');if(d){await refreshMe();setView('find')}}
 
@@ -202,7 +151,7 @@ export default function Carpool(){
 
  const signIn=<div className="emptycard"><UserRound size={38}/><h2>Sign in to travel together</h2><p>Create a verified Humsafar account or sign in to continue.</p><a className="primary" href="/auth">Sign in or create account</a></div>;
 
- return <><Toaster richColors position="top-center"/><header className="topbar"><a className="brand" href="/"><span className="brand-icon"><CarFront/></span>humsafar<span className="urdu">ہم سفر</span></a><nav><button className={view==='find'?'navactive':''} onClick={()=>setView('find')}>Find a ride</button><button className={view==='trips'?'navactive':''} onClick={()=>needProfile('trips')}>My trips</button><Link className="nav-link" href="/driver-verification">Driver verification</Link><button className={view==='profile'?'navactive':''} onClick={()=>setView('profile')}>{me.profile?.name.split(' ')[0]||'Account'}</button></nav><button className="outline" onClick={openRideOffer}><Plus size={18}/>Offer a ride</button></header><main className="shell"><div className="intro"><div><p className="eyebrow">GOOD COMPANY. SHARED JOURNEYS.</p><h1>{view==='find'?'Your route. Your people.':view==='offer'?'Got room for company?':view==='trips'?'Your shared journeys.':'A little about you.'}</h1><p>{view==='find'?'Find a seat with someone heading your way.':view==='offer'?'Set your route. Choose your days. Approve your passengers.':view==='trips'?'Manage requests, meet your driver, and follow your trip.':'Help your fellow travellers know who they’re riding with.'}</p></div><span className="free-label">Free to connect · Karachi pilot</span></div>{error&&<div className="banner error" role="alert">{error}<button className="subtle" onClick={()=>setError('')}>Dismiss</button></div>}{tracking&&<div className="banner"><Navigation size={17} style={{display:'inline',marginRight:8}}/>Your device is sharing location. Keep this page open.<button className="subtle" onClick={stopTracking}>Stop sharing</button></div>}
+ return <><Toaster richColors position="top-center"/><header className="topbar"><Link className="brand" href="/"><span className="brand-icon"><CarFront/></span>humsafar<span className="urdu">ہم سفر</span></Link><nav><button className={view==='find'?'navactive':''} onClick={()=>setView('find')}>Find a ride</button><button className={view==='trips'?'navactive':''} onClick={()=>needProfile('trips')}>My trips</button><Link className="nav-link" href="/driver-verification">Driver verification</Link><AdminRequestsLink/><button className={view==='profile'?'navactive':''} onClick={()=>setView('profile')}>{me.profile?.name.split(' ')[0]||'Account'}</button></nav><button className="outline" onClick={openRideOffer}><Plus size={18}/>Offer a ride</button></header><main className="shell"><div className="intro"><div><p className="eyebrow">GOOD COMPANY. SHARED JOURNEYS.</p><h1>{view==='find'?'Your route. Your people.':view==='offer'?'Got room for company?':view==='trips'?'Your shared journeys.':'A little about you.'}</h1><p>{view==='find'?'Find a seat with someone heading your way.':view==='offer'?'Set your route. Choose your days. Approve your passengers.':view==='trips'?'Manage requests, meet your driver, and follow your trip.':'Help your fellow travellers know who they’re riding with.'}</p></div><span className="free-label">Free to connect · Karachi pilot</span></div>{error&&<div className="banner error" role="alert">{error}<button className="subtle" onClick={()=>setError('')}>Dismiss</button></div>}{tracking&&<div className="banner"><Navigation size={17} style={{display:'inline',marginRight:8}}/>Your device is sharing location. Keep this page open.<button className="subtle" onClick={stopTracking}>Stop sharing</button></div>}
 
  {view==='find'&&<><form className="searchbar" onSubmit={e=>{e.preventDefault();if((from.trim()&&!fromPoint)||(to.trim()&&!toPoint)){toast.error('Choose a dropdown result or confirm a map pin for each location.');return}search()}}><LocationPicker label="Leaving from" text={from} selected={fromPoint} onText={s=>{setFrom(s);setFromPoint(null)}} onSelect={p=>{setFrom(p.label);setFromPoint(p)}}/><button className="swap" type="button" aria-label="Swap departure and destination" onClick={()=>{setFrom(to);setTo(from);setFromPoint(toPoint);setToPoint(fromPoint)}}><ArrowLeftRight size={20}/></button><LocationPicker label="Going to" text={to} selected={toPoint} onText={s=>{setTo(s);setToPoint(null)}} onSelect={p=>{setTo(p.label);setToPoint(p)}}/><label><span>Travel date</span><input aria-label="Travel date" type="date" min={pakistanToday()} required value={date} onChange={e=>setDate(e.target.value)}/></label><button disabled={loading} className="primary"><Search size={19}/>{loading?'Searching…':'Find rides'}</button></form><div className="workspace"><section><div className="sectionhead"><h2>{loading?'Looking for your ride…':`${rides.length} ${rides.length===1?'ride':'rides'} available`}</h2><span>Driver approval on every booking</span></div>{loading?<p className="loading" role="status">Loading available rides…</p>:rides.length?rides.map(r=><RideCard key={r.id} ride={r} onOpen={()=>openRide(r.id)}/>):<div className="emptycard"><CarFront size={42}/><h2>Be part of the first shared journeys.</h2><p>No rides match this date and route yet. Try another date or offer a ride.</p><button className="outline" onClick={openRideOffer}><Plus size={17}/>Offer the first ride</button></div>}<p className="muted" style={{marginTop:16}}>Karachi pilot: choose exact places or map pins. Results match pickup and drop-off points within 1 km of your choices, not the full driving route. Leave both fields empty to browse all Karachi rides.</p></section><aside><div className="darkcard"><ShieldCheck size={30}/><h2>Know your ride.<br/>Share your journey.</h2><p>See who’s travelling before you request a seat. Follow your driver on the way to pickup.</p><div className="safetyrow"><Users size={20}/>Passenger details before booking</div><div className="safetyrow"><MapPin size={20}/>Location sharing with consent</div></div><div className="note"><h3>Your fare, your agreement.</h3><p>Discuss the fare directly with your driver. No platform payments or subscriptions.</p><ArrowRight size={20}/></div><MapView/></aside></div></>}
 
@@ -214,7 +163,7 @@ export default function Carpool(){
 
  </main><footer><span>humsafar · Shared journeys across Karachi</span><span>Fares in PKR · Times in Pakistan Standard Time</span></footer>
 
- <Dialog open={!!selected} onOpenChange={v=>{if(!v){setSelected(null);const url=new URL(location.href);url.searchParams.delete('chat');history.replaceState(null,'',url)}}}><DialogContent className="detaildialog sm:max-w-2xl"><DialogTitle>{detail?`${detail.ride.origin} → ${detail.ride.destination}`:'Loading ride…'}</DialogTitle><DialogDescription>{detail?`${dateLabel(detail.ride.date)} · ${detail.ride.time} PKT · ${labels[detail.ride.status]}`:'Fetching the latest ride details.'}</DialogDescription>{detail&&<div className="detailstack"><div className="manifest"><span className="avatar">{initials(detail.ride.driverName)}</span><div><strong>{detail.ride.driverName} · Driver</strong><p className="muted">{detail.ride.driverGender} · {detail.ride.car}{detail.ride.plate?' · '+detail.ride.plate:''}</p></div></div><div className="formgrid"><div><h3>Pickup</h3><p>{detail.ride.pickup}</p><MeetingPin value={detail.ride.origin_point} label="Open pickup pin"/></div><div><h3>Drop-off</h3><p>{detail.ride.dropoff}</p><MeetingPin value={detail.ride.destination_point} label="Open drop-off pin"/></div><div><h3>{money(detail.ride.fare)} / seat</h3><p className="muted">Final fare agreed directly</p></div><div><h3>{detail.ride.seats-detail.ride.occupied} seats available</h3><p className="muted">{detail.ride.occupied} confirmed passengers</p></div></div>{detail.ride.notes&&<p>{detail.ride.notes}</p>}{detail.ride.phone&&<p>Driver contact: <a href={'tel:'+detail.ride.phone}>{detail.ride.phone}</a></p>}<div><h3>Who’s in the car</h3><p className="muted">{detail.passengers.length?detail.passengers.map(p=>p.gender).reduce((a:string[],g:string)=>{if(!a.includes(g))a.push(g);return a},[]).map(g=>`${detail.passengers.filter(p=>p.gender===g).length} ${g==='Woman'?'women':g==='Man'?'men':g.toLowerCase()}`).join(' · '):'No approved passengers yet.'}</p>{detail.passengers.map((p,i)=><div key={i} className="manifest" style={{marginTop:8}}><span className="avatar">{initials(p.name)}</span><div><strong>{p.name}</strong><p className="muted">{p.gender}</p></div></div>)}<p className="muted" style={{marginTop:8}}>Gender is optional and self-described. Profiles and identities are not verified.</p></div>
+ <Dialog open={!!selected} onOpenChange={v=>{if(!v){setSelected(null);setDetail(null);setShareLink('');const url=new URL(location.href);url.searchParams.delete('chat');history.replaceState(null,'',url)}}}><DialogContent className="detaildialog sm:max-w-2xl"><DialogTitle>{detail?`${detail.ride.origin} → ${detail.ride.destination}`:'Loading ride…'}</DialogTitle><DialogDescription>{detail?`${dateLabel(detail.ride.date)} · ${detail.ride.time} PKT · ${labels[detail.ride.status]}`:'Fetching the latest ride details.'}</DialogDescription>{detail&&<div className="detailstack"><div className="manifest"><span className="avatar">{initials(detail.ride.driverName)}</span><div><strong>{detail.ride.driverName} · Driver</strong><p className="muted">{detail.ride.driverGender} · {detail.ride.car}{detail.ride.plate?' · '+detail.ride.plate:''}</p></div></div><div className="formgrid"><div><h3>Pickup</h3><p>{detail.ride.pickup}</p><MeetingPin value={detail.ride.origin_point} label="Open pickup pin"/></div><div><h3>Drop-off</h3><p>{detail.ride.dropoff}</p><MeetingPin value={detail.ride.destination_point} label="Open drop-off pin"/></div><div><h3>{money(detail.ride.fare)} / seat</h3><p className="muted">Final fare agreed directly</p></div><div><h3>{detail.ride.seats-detail.ride.occupied} seats available</h3><p className="muted">{detail.ride.occupied} confirmed passengers</p></div></div>{detail.ride.notes&&<p>{detail.ride.notes}</p>}{detail.ride.phone&&<p>Driver contact: <a href={'tel:'+detail.ride.phone}>{detail.ride.phone}</a></p>}<div><h3>Who’s in the car</h3><p className="muted">{detail.passengers.length?detail.passengers.map(p=>p.gender).reduce((a:string[],g:string)=>{if(!a.includes(g))a.push(g);return a},[]).map(g=>`${detail.passengers.filter(p=>p.gender===g).length} ${g==='Woman'?'women':g==='Man'?'men':g.toLowerCase()}`).join(' · '):'No approved passengers yet.'}</p>{detail.passengers.map((p,i)=><div key={i} className="manifest" style={{marginTop:8}}><span className="avatar">{initials(p.name)}</span><div><strong>{p.name}</strong><p className="muted">{p.gender}</p></div></div>)}<p className="muted" style={{marginTop:8}}>Gender is optional and self-described. Profiles and identities are not verified.</p></div>
 
  {!detail.own&&(!detail.booking||['cancelled','declined'].includes(detail.booking.status))&&detail.ride.status==='scheduled'&&<form onSubmit={async e=>{e.preventDefault();if(!me.profile){setSelected(null);setView('profile');toast.info('Save your profile first.');return}await mutate('request',{id:detail.ride.id,message},'Seat request sent to the driver')}}><label className="field">Message the driver<textarea required maxLength={600} value={message} onChange={e=>setMessage(e.target.value)} placeholder="Confirm your pickup, drop-off and proposed fare."/></label><button disabled={busy} className="primary" style={{marginTop:12}}>Request one seat</button><p className="muted">Your seat is reserved only when the driver approves.</p></form>}
 
@@ -224,34 +173,9 @@ export default function Carpool(){
 
  {(detail.own||detail.booking?.status==='approved')&&['enroute','arrived','started'].includes(detail.ride.status)&&<><h3>Driver location</h3><LocationStatus ride={detail.ride}/>{detail.own&&<><p className="muted">Sharing makes your location visible to approved passengers. During the trip, their private tracking links can also show it to trusted contacts.</p><button className="outline" onClick={tracking?stopTracking:startTracking}><Navigation size={18}/>{tracking?'Stop location sharing':'Allow & share my location'}</button></>}{detail.ride.sharing===1&&<MapView ride={detail.ride}/>}</>}
 
- {(detail.own||detail.booking?.status==='approved')&&detail.ride.status==='started'&&<div><h3>Share this trip</h3><p className="muted">Shares driver, car, route and latest driver location. Other passengers’ profiles and phone numbers stay private. In this owner-only preview, recipients cannot open links yet.</p><div className="actions"><button className="outline" disabled={busy} onClick={share}><Share2 size={18}/>Create private link</button><button className="subtle" disabled={busy} onClick={async()=>{await mutate('revokeShare',{id:detail.ride.id},'Your links are disabled');setShareLink('')}}>Stop link sharing</button></div>{shareLink&&<label className="field" style={{marginTop:12}}>Private trip link<input readOnly value={shareLink} onFocus={e=>e.target.select()}/><button className="outline" onClick={async()=>{try{await navigator.clipboard.writeText(shareLink);toast.success('Link copied')}catch{toast.info('Select the link above and copy it.')}}}>Copy link</button></label>}</div>}
+ {(detail.own||detail.booking?.status==='approved')&&detail.ride.status==='started'&&<div><h3>Share this trip</h3><p className="muted">Shares driver, car, route and latest driver location. Other passengers’ profiles and phone numbers stay private. Recipients must sign in to open the link.</p><div className="actions"><button className="outline" disabled={busy} onClick={share}><Share2 size={18}/>Create private link</button><button className="subtle" disabled={busy} onClick={async()=>{await mutate('revokeShare',{id:detail.ride.id},'Your links are disabled');setShareLink('')}}>Stop link sharing</button></div>{shareLink&&<label className="field" style={{marginTop:12}}>Private trip link<input readOnly value={shareLink} onFocus={e=>e.target.select()}/><button className="outline" onClick={async()=>{try{await navigator.clipboard.writeText(shareLink);toast.success('Link copied')}catch{toast.info('Select the link above and copy it.')}}}>Copy link</button></label>}</div>}
 
- {(detail.own||detail.booking?.status==='approved')&&<section className="ride-chat" aria-label="Ride chat">
-  <header className="ride-chat-header">
-   <span className="ride-chat-heading-icon"><MessageCircle size={20}/></span>
-   <div><h3>Ride chat</h3><p>Driver and approved passengers</p></div>
-   <span className="ride-chat-tag">Ride group</span>
-  </header>
-  {chatError&&<p className="banner error ride-chat-error" role="alert">{chatError}</p>}
-  <div className="ride-chat-messages" role="log" aria-live="polite" aria-label="Chat messages">
-   {chatMessages.length===0?<div className="ride-chat-empty"><MessageCircle size={27}/><strong>No messages yet</strong><span>Say hello to everyone on this ride.</span></div>:chatMessages.map(chatMessage=>{
-    const ownMessage=chatMessage.sender_id===me.user?.id;
-    return <div key={chatMessage.id} className={`ride-chat-row ${ownMessage?'is-own':''}`}>
-     <div className="ride-chat-bubble">
-      {!ownMessage&&<span className="ride-chat-sender">{chatMessage.sender_name}</span>}
-      <p>{chatMessage.body}</p>
-      <time dateTime={chatMessage.created_at}>{new Date(chatMessage.created_at).toLocaleTimeString('en-PK',{hour:'numeric',minute:'2-digit'})}</time>
-      {ownMessage&&chatMessage.read_by.length>0&&<span className="ride-chat-receipt">Seen by {chatMessage.read_by.join(', ')}</span>}
-     </div>
-    </div>;
-   })}
-   <div ref={chatEndRef}/>
-  </div>
-  <form className="ride-chat-composer" onSubmit={sendChatMessage}>
-   <textarea name="body" rows={1} maxLength={2000} required aria-label="Message" placeholder="Write a message…" className="ride-chat-input" onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/>
-   <button className="ride-chat-send" type="submit" disabled={chatBusy} aria-label="Send message" title="Send message"><Send size={18}/></button>
-  </form>
- </section>}
+ {(detail.own||detail.booking?.status==='approved')&&<RideChat key={detail.ride.id} rideId={detail.ride.id} userId={me.user?.id} canSend={['scheduled','enroute','arrived','started'].includes(detail.ride.status)}/>}
 
  </div>}</DialogContent></Dialog></>;
 

@@ -1,46 +1,60 @@
-# Self-hosted driver verification model contract
+# Self-hosted verification service contract
 
-Humsafar calls the model from the server after the driver uploads both images. The URL and shared key are server-only settings. The model must be hosted and operated by Humsafar; it must not forward either image to another service. The model only compares faces; it does not extract licence text or check expiry.
+The website sends uploaded images to Humsafar's own model service. It performs
+advisory face comparison, local OCR and photo-quality checks. It does not query a
+government registry, establish authenticity or decide driver eligibility.
 
 ## Request
 
-Humsafar sends one `multipart/form-data` POST to `DRIVER_VERIFICATION_MODEL_URL` with:
+`POST /verify`, multipart form with a server-only bearer model key:
 
-- `Authorization: Bearer <DRIVER_VERIFICATION_MODEL_KEY>`
-- `countryCode`: `PK`
-- `region`: `Sindh`
-- `licence`: the uploaded licence image
-- `selfie`: the uploaded selfie image
+- `licence`: JPEG, PNG or WebP, at most 5 MB.
+- `selfie`: JPEG, PNG or WebP, at most 5 MB.
+- `countryCode`: PK; `region`: Sindh.
+- `declaredName`: optional full name supplied by the applicant, at most 100 characters.
 
-The model should return one JSON object and should not retain image bytes or face embeddings after the request. Face comparison is 1:1 comparison of the licence portrait to the selfie. This contract does not claim liveness detection.
+No raw image, full OCR transcript, licence number or printed name is returned.
+The name supplied is compared only as text and is not proof of identity.
 
 ## Response
-
-Return `application/json` with this shape:
 
 ```json
 {
   "faceMatchStatus": "match",
-  "faceMatchScore": 0.41
+  "faceMatchScore": 0.8,
+  "documentChecks": {
+    "state": "review_required",
+    "expiryDate": "2030-12-31",
+    "expiryStatus": "valid",
+    "nameStatus": "consistent",
+    "licenceNumberPresent": true,
+    "reasons": ["Printed expiry appears current; a reviewer must confirm it."]
+  }
 }
 ```
 
-- `faceMatchStatus` is one of `match`, `no_match`, `no_face`, `multiple_faces`, or `uncertain`.
-- `faceMatchScore` is the OpenCV SFace cosine similarity, normally between `-1` and `1`, or `null` if there is no comparable face. It is not a probability or percentage.
+Face status is match, no_match, no_face, multiple_faces or uncertain. Its score is
+cosine similarity, not a probability. It never automatically approves/rejects a
+driver. A camera photo is not a liveness check.
 
-The face result is advisory only. Every application remains pending until an administrator visually checks the licence, including its expiry date, and reviews the face comparison. A match score is not a probability, identity proof, liveness result, or licence authenticity check. The default cosine threshold (0.383) is a starting point and must be calibrated against representative Sindh licence/selfie samples before use.
+Document state is review_required or unavailable. Expiry status is valid, expired,
+ambiguous or unreadable. Name status is consistent, different, unreadable or
+not_provided. Only confident labelled English fields are parsed. Dates with
+conflicting values or ambiguous day/month ordering require human confirmation.
+Birth and issue dates are not substituted for expiry. Quality checks flag small,
+blurry, underexposed or blank/overexposed images with descriptive reasons.
 
-Persist only the review state, face match status/score, reason code, and processing time. Do not return or persist a face embedding or extracted licence text.
+The website whitelists and bounds metadata before saving automated results. Raw
+OCR text, names, numbers, addresses, birth dates and embeddings are not persisted
+in those results. Original documents remain in the existing private bucket.
+Automated metadata follows the existing document/comparison purge lifecycle.
+The separate administrator-confirmed expiry remains available to enforce approval
+validity after image retention ends.
 
-## Local configuration
+## Deployment
 
-Add the following to the ignored `.env.local` file (or the app's server secret store):
-
-```dotenv
-SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
-DRIVER_VERIFICATION_MODEL_URL=http://127.0.0.1:8000/verify
-DRIVER_VERIFICATION_MODEL_KEY=your-shared-secret
-DRIVER_VERIFICATION_FACE_MIN_SCORE=0.383
-```
-
-The included self-hosted service is in `verification-model/`. The local URL above is for development only. For Vercel production, deploy that service on a private server you control behind HTTPS and set `DRIVER_VERIFICATION_MODEL_URL` and the same `DRIVER_VERIFICATION_MODEL_KEY` in Vercel project environment variables. Do not use `localhost` in Vercel. The service-role key, model URL, and model key must never use a `NEXT_PUBLIC_` prefix. Until the model endpoint and service-role key are configured and reachable, applications remain pending for manual review.
+Use `npm run verification:setup` and `npm run verification:start` for local setup.
+The ignored `.env.local` needs a Supabase server key, model URL and model key.
+Local model URL is `http://127.0.0.1:8000/verify`; production requires an HTTPS
+endpoint on a server operated by Humsafar. Never use NEXT_PUBLIC_ for server keys.
+See `verification-model/README.md` for commands and provider/camera limitations.

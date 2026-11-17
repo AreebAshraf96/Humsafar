@@ -5,7 +5,7 @@ import {KARACHI} from '@/lib/locations';
 
 export default function RideMap({lat,lng,active=false,onPick}:{lat?:number|null;lng?:number|null;active?:boolean;onPick?:(lat:number,lng:number)=>void}){
  const element=useRef<HTMLDivElement>(null),map=useRef<LeafletMap|null>(null),marker=useRef<CircleMarker|null>(null),[failed,setFailed]=useState(false),[ready,setReady]=useState(false);
- const pickRef=useRef(onPick);pickRef.current=onPick;
+ const pickRef=useRef(onPick);useEffect(()=>{pickRef.current=onPick},[onPick]);
  useEffect(()=>{
   let disposed=false;
   import('leaflet').then(L=>{

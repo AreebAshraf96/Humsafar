@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
-let active;let background;const events={};const shown=[];let closed=0;
+let active;let background;const events={};const shown=[];const opened=[];let closed=0;
 const worker={HUMSAFAR_FIREBASE_CONFIG:{},addEventListener:(name,fn)=>events[name]=fn,registration:{showNotification:async(title,options)=>shown.push({title,options}),getNotifications:async()=>shown.map(()=>({close:()=>closed++}))}};
 const indexedDB={open:()=>{const req={};queueMicrotask(()=>{req.result={close(){},transaction(){const tx={};const operation=write=>{const result={};queueMicrotask(()=>{if(write!==undefined){active=write.value;}else result.result=active;tx.oncomplete()});return result;};tx.objectStore=()=>({put:value=>operation({value}),get:()=>operation()});return tx;}};req.onsuccess()});return req;}};
-vm.runInNewContext(readFileSync(new URL('../public/firebase-messaging-sw.js',import.meta.url),'utf8'),{self:worker,indexedDB,importScripts(){},firebase:{initializeApp(){},messaging:()=>({onBackgroundMessage:fn=>background=fn})}});
+vm.runInNewContext(readFileSync(new URL('../public/firebase-messaging-sw.js',import.meta.url),'utf8'),{self:worker,clients:{openWindow:async url=>opened.push(url)},indexedDB,importScripts(){},firebase:{initializeApp(){},messaging:()=>({onBackgroundMessage:fn=>background=fn})}});
 const set=async(userId)=>{let pending;let ack=false;events.message({data:{type:'HUMSAFAR_ACCOUNT',userId},ports:[{postMessage:()=>ack=true}],waitUntil:p=>pending=p});await pending;assert.equal(ack,true)};
 const push=userId=>background({messageId:'test',data:{userId,title:'Trip update',body:'Driver arrived'}});
 await push('one');assert.equal(shown.length,0);
@@ -12,3 +12,13 @@ await set('one');await push('one');assert.equal(shown.length,1);
 await set(null);assert.equal(closed,1);await push('one');assert.equal(shown.length,1,'logout prevents new notifications');
 await set('two');await push('one');assert.equal(shown.length,1,'previous account notifications remain hidden');await push('two');assert.equal(shown.length,2);
 console.log('Push privacy checks passed: logged-out suppression, closing existing alerts and account-switch isolation.');
+
+const rideUrl='/?chat=00000000-0000-4000-8000-000000000001';
+await background({messageId:'chat',data:{userId:'two',url:rideUrl}});
+assert.equal(shown.at(-1).options.data.url,rideUrl);
+let click;
+events.notificationclick({notification:{close(){},data:{url:rideUrl}},waitUntil:p=>click=p});await click;
+assert.equal(opened.at(-1),rideUrl);
+events.notificationclick({notification:{close(){},data:{url:'https://evil.invalid/'}},waitUntil:p=>click=p});await click;
+assert.equal(opened.at(-1),'/');
+console.log('Notification destination checks passed: ride chat preserved and external URLs rejected.');

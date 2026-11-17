@@ -16,7 +16,7 @@ try {
  const originPoint={id:'test:clifton',label:'Dolmen Mall Clifton',address:'Karachi',lat:24.8021172,lng:67.0302623,source:'pin'};
  const destinationPoint={id:'test:ubl',label:'UBL City Building',address:'Karachi',lat:24.8492715,lng:67.0013189,source:'pin'};
  const listing={originPoint,destinationPoint,date:tomorrow,time:'23:30',seats:1,fare:null,car:'White Corolla',plate:'TEST-123',pickup:'Public gate',dropoff:'Office entrance',days:[]};
- await db.query("insert into public.driver_verifications(user_id,vehicle_registration_number,status) values($1,'TEST-123','approved')",[driver]);
+ await db.query("insert into public.driver_verifications(user_id,vehicle_registration_number,status,licence_expiry_date) values($1,'TEST-123','approved',current_date+365)",[driver]);
  await denied(()=>rpc(p2,'create',listing),'42501');
  await rpc(driver,'create',listing);
  const ride=(await rpc(p1,'rides',{date:tomorrow})).rides[0];

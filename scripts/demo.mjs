@@ -13,11 +13,13 @@ const originPoint={id:'demo:clifton',label:'Dolmen Mall Clifton',address:'Clifto
 const destinationPoint={id:'demo:ubl',label:'UBL City Building',address:'I. I. Chundrigar Road, Karachi',lat:24.8492715,lng:67.0013189,source:'pin'};
 const driver='00000000-0000-4000-8000-000000000011';
 await db.query("insert into auth.users(id,email,email_confirmed_at) values($1,'driver@example.test',now())",[driver]);
+await db.query("insert into public.driver_verifications(user_id,status,licence_expiry_date) values($1,'approved',current_date+365)",[driver]);
 await rpc(driver,'profile',{name:'Demo driver — Sana',gender:'Woman',phone:''});
 const tomorrow=new Date(Date.now()+86400000).toISOString().slice(0,10);
 await rpc(driver,'create',{originPoint,destinationPoint,date:tomorrow,time:'08:30',seats:3,fare:350,car:'White Toyota Corolla · DEMO',plate:'DEMO-001',pickup:'Mall main entrance',dropoff:'Office entrance',notes:'Sample ride for the review demo. Not a real offer.',days:[]});
 const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Karachi',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 try{await rpc(driver,'create',{originPoint,destinationPoint,date:today,time:'23:59',seats:3,fare:350,car:'White Toyota Corolla · DEMO',plate:'DEMO-002',pickup:'Mall main entrance',dropoff:'Office entrance',notes:'Sample ride for the review demo. Not a real offer.',days:[]});}catch{}
+if(process.argv.includes('--check-seed')) { console.log('Demo seed passed.'); await db.close(); process.exit(0); }
 const server=createServer(async(req,res)=>{
  const send=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
  try{

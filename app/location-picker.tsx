@@ -10,10 +10,13 @@ import {validSession} from '@/lib/supabase-auth';
 export default function LocationPicker({label,text,selected,onText,onSelect}:{label:string;text:string;selected:Place|null;onText:(text:string)=>void;onSelect:(place:Place)=>void}){
  const id=useId();const [items,setItems]=useState<Place[]>([]),[loading,setLoading]=useState(false),[error,setError]=useState(''),[open,setOpen]=useState(false),[editing,setEditing]=useState(false),[draft,setDraft]=useState<Place|null>(null),[name,setName]=useState(''),[pinError,setPinError]=useState(''),[locating,setLocating]=useState(false),[latText,setLatText]=useState(''),[lngText,setLngText]=useState('');
  useEffect(()=>{
-  const q=text.trim();const controller=new AbortController();setItems([]);setError('');
-  if(q.length<3||selected||!open){setLoading(false);return()=>controller.abort()}
-  setLoading(true);const timer=setTimeout(async()=>{try{const session=await validSession();const r=await fetch('/api/places?'+new URLSearchParams({q}),{signal:controller.signal,headers:session?{Authorization:`Bearer ${session.access_token}`}:{}});const data=await r.json() as {places?:Place[];error?:string};if(!r.ok)throw new Error(data.error||'Search unavailable');if(!controller.signal.aborted)setItems(data.places||[])}catch(e){if(!controller.signal.aborted)setError((e as Error).message)}finally{if(!controller.signal.aborted)setLoading(false)}},600);
-  return()=>{controller.abort();clearTimeout(timer)};
+  const query=text.trim();const controller=new AbortController();
+  const reset=setTimeout(()=>{setItems([]);setError('');setLoading(query.length>=3&&!selected&&open)},0);
+  const timer=setTimeout(async()=>{
+   if(query.length<3||selected||!open)return;
+   try{const session=await validSession();const response=await fetch('/api/places?'+new URLSearchParams({q:query}),{signal:controller.signal,headers:session?{Authorization:`Bearer ${session.access_token}`}:{}});const data=await response.json() as {places?:Place[];error?:string};if(!response.ok)throw new Error(data.error||'Search unavailable');if(!controller.signal.aborted)setItems(data.places||[])}catch(e){if(!controller.signal.aborted)setError((e as Error).message)}finally{if(!controller.signal.aborted)setLoading(false)}
+  },600);
+  return()=>{controller.abort();clearTimeout(reset);clearTimeout(timer)};
  },[text,selected,open]);
  function edit(p:Place|null){setDraft(p);setLatText(p?String(p.lat):'');setLngText(p?String(p.lng):'');setName(p?.label||text);setPinError('');setOpen(false);setEditing(true)}
  function pick(lat:number,lng:number){if(!inKarachi(lat,lng)){setPinError('Select a point within the Karachi pilot area.');return}setLatText(String(lat));setLngText(String(lng));setPinError('');setDraft({id:`pin:${lat.toFixed(6)},${lng.toFixed(6)}`,label:name||'Map pin',address:'Karachi, Pakistan',lat,lng,source:'pin'})}
